@@ -70,7 +70,7 @@
 
   function inspectElement(selected, options = {}) {
     if (!isDomElement(selected)) {
-      throw new Error('右クリックした要素を取得できません');
+      throw new Error('対象要素を取得できません');
     }
 
     const maxAncestorDepth = Number.isInteger(options.maxAncestorDepth)
@@ -87,9 +87,13 @@
     return {
       selectedTag: selected.tagName?.toLowerCase(),
       selectedAttributes: attributesToObject(selected),
+      selectedText: normalizeText(selected.textContent),
+      selectedRect: getRoundedRect(selected),
+      selectedOuterHTML: String(selected.outerHTML || '').slice(0, maxOuterHtmlLength),
 
       controlTag: control.tagName?.toLowerCase(),
       controlAttributes: attributesToObject(control),
+      controlRect: getRoundedRect(control),
 
       text: normalizeText(control.textContent),
 
@@ -109,7 +113,7 @@
           }
         : null,
 
-      ancestors: collectAncestors(control, maxAncestorDepth),
+      ancestors: collectAncestors(selected, maxAncestorDepth),
       outerHTML: String(control.outerHTML || '').slice(0, maxOuterHtmlLength)
     };
   }

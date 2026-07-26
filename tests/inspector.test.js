@@ -34,6 +34,10 @@ class MockElement {
     return child;
   }
 
+  get firstElementChild() {
+    return this.children[0] || null;
+  }
+
   getAttribute(name) {
     return Object.prototype.hasOwnProperty.call(this.attributeMap, name)
       ? this.attributeMap[name]
@@ -94,7 +98,7 @@ global.Element = MockElement;
 const root = path.join(__dirname, '..');
 const inspector = require(path.join(root, 'inspector.js'));
 
-test('inspects a nested SVG target through its nearest button', () => {
+test('inspects the selected SVG child and its nearest actionable control', () => {
   const parent = new MockElement('div', { id: 'parent' }, {
     rect: { top: 10.2, left: 20.8, width: 300.1, height: 80.7 },
     computedStyle: { display: 'flex', visibility: 'visible', position: 'relative' }
@@ -109,22 +113,28 @@ test('inspects a nested SVG target through its nearest button', () => {
     computedStyle: { display: 'inline-flex', visibility: 'visible', position: 'absolute' }
   }));
   const svg = button.appendChild(new MockElement('svg', { width: '20', height: '20' }));
-  const use = svg.appendChild(new MockElement('use', { href: '/sprite.svg#copy' }));
+  const use = svg.appendChild(new MockElement('use', { href: '/sprite.svg#copy' }, {
+    textContent: ' icon ',
+    outerHTML: '<use href="/sprite.svg#copy"></use>',
+    rect: { top: 14.2, left: 27.9, width: 18.1, height: 18.2 }
+  }));
   svg.appendChild(new MockElement('path', { d: 'M0 0h10v10z' }));
   svg.appendChild(new MockElement('circle', { cx: '5', cy: '5', r: '2' }));
 
   const result = inspector.inspectElement(use);
 
   assert.equal(result.selectedTag, 'use');
+  assert.equal(result.selectedText, 'icon');
+  assert.equal(result.selectedOuterHTML, '<use href="/sprite.svg#copy"></use>');
+  assert.deepEqual(result.selectedRect, { top: 14, left: 28, width: 18, height: 18 });
   assert.equal(result.controlTag, 'button');
-  assert.equal(result.controlAttributes['data-testid'], 'sample-button');
+  assert.deepEqual(result.controlRect, { top: 12, left: 25, width: 40, height: 33 });
   assert.equal(result.text, 'Sample button');
   assert.equal(result.svg.useHref, '/sprite.svg#copy');
   assert.deepEqual(result.svg.paths, ['M0 0h10v10z']);
   assert.deepEqual(result.svg.circles, [{ cx: '5', cy: '5', r: '2' }]);
-  assert.equal(result.ancestors.length, 2);
-  assert.deepEqual(result.ancestors[0].rect, { top: 12, left: 25, width: 40, height: 33 });
-  assert.equal(result.ancestors[1].display, 'flex');
+  assert.equal(result.ancestors[0].tagName, 'use');
+  assert.equal(result.ancestors[1].tagName, 'svg');
 });
 
 test('uses the selected element when no actionable ancestor exists', () => {
@@ -135,67 +145,51 @@ test('uses the selected element when no actionable ancestor exists', () => {
   assert.equal(result.svg, null);
 });
 
-test('limits outerHTML to 5000 characters by default', () => {
+test('limits selected and control outerHTML to 5000 characters by default', () => {
   const div = new MockElement('div', {}, { outerHTML: 'x'.repeat(7000) });
   const result = inspector.inspectElement(div);
+  assert.equal(result.selectedOuterHTML.length, 5000);
   assert.equal(result.outerHTML.length, 5000);
 });
 
 test('rejects a missing DOM element', () => {
-  assert.throws(() => inspector.inspectElement(null), /右クリックした要素を取得できません/);
+  assert.throws(() => inspector.inspectElement(null), /対象要素を取得できません/);
 });
 
-test('manifest and runtime wiring remain narrow and frame-aware', () => {
+test('manifest and runtime implement the toolbar-driven in-page inspector', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
   const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
   const inspectorSource = fs.readFileSync(path.join(root, 'inspector.js'), 'utf8');
-  const iconPath = path.join(root, 'assets', 'icons', 'main-icon.png');
-  const contextMenuIcon16Path = path.join(root, 'assets', 'icons', 'context-menu-icon-16.png');
-  const contextMenuIcon32Path = path.join(root, 'assets', 'icons', 'context-menu-icon-32.png');
-  const icon = fs.readFileSync(iconPath);
-  const contextMenuIcon16 = fs.readFileSync(contextMenuIcon16Path);
-  const contextMenuIcon32 = fs.readFileSync(contextMenuIcon32Path);
   const runtimeSource = `${background}\n${content}\n${inspectorSource}`;
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.5.0');
-  assert.deepEqual(manifest.permissions.sort(), ['clipboardWrite', 'contextMenus']);
-  assert.equal(manifest.content_scripts[0].all_frames, true);
-  assert.deepEqual(manifest.content_scripts[0].js, ['inspector.js', 'content.js']);
-  assert.deepEqual(manifest.icons, {
-    16: 'assets/icons/context-menu-icon-16.png',
-    32: 'assets/icons/context-menu-icon-32.png',
-    48: 'assets/icons/main-icon.png',
-    128: 'assets/icons/main-icon.png'
-  });
-  assert.deepEqual(new Set(Object.values(manifest.action.default_icon)), new Set(['assets/icons/main-icon.png']));
-  assert.equal(manifest.action.default_title, 'Element Inspector');
-  assert.deepEqual(icon.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  assert.equal(icon.readUInt32BE(16), 128);
-  assert.equal(icon.readUInt32BE(20), 128);
-  assert.deepEqual(contextMenuIcon16.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  assert.equal(contextMenuIcon16.readUInt32BE(16), 16);
-  assert.equal(contextMenuIcon16.readUInt32BE(20), 16);
-  assert.deepEqual(contextMenuIcon32.subarray(0, 8), Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-  assert.equal(contextMenuIcon32.readUInt32BE(16), 32);
-  assert.equal(contextMenuIcon32.readUInt32BE(20), 32);
-  assert.match(background, /\{ frameId \}/);
-  assert.match(content, /document\.addEventListener\('contextmenu'/);
+  assert.equal(manifest.version, '0.6.0');
+  assert.equal(pkg.version, '0.6.0');
+  assert.deepEqual(manifest.permissions, ['clipboardWrite']);
+  assert.equal(manifest.content_scripts[0].all_frames, undefined);
+  assert.doesNotMatch(background, /contextMenus/);
+  assert.match(background, /chrome\.action\.onClicked/);
+  assert.match(background, /ELEMENT_INSPECTOR_TOGGLE/);
+  assert.match(background, /\{ frameId: 0 \}/);
+  assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/);
+  assert.match(content, /@property --ei-angle/);
+  assert.match(content, /conic-gradient\(from var\(--ei-angle\)/);
+  assert.match(content, /ei-rainbow-spin 1\.25s linear infinite/);
+  assert.match(content, /selectedElement\?\.parentElement/);
+  assert.match(content, /selectedElement\?\.firstElementChild/);
+  assert.match(content, /countdownDeadline/);
+  assert.match(content, /state\.mode !== 'picking'/);
+  assert.match(content, /JSONをコピー/);
+  assert.match(content, /JSONを保存/);
+  assert.match(content, /beginPanelDrag/);
+  assert.match(content, /setPointerCapture/);
+  assert.match(content, /releasePointerCapture/);
+  assert.match(content, /event\.key === 'Escape'[\s\S]*destroyInspector\(\)/);
+  assert.match(content, /if \(state\.open\) destroyInspector\(\)/);
   assert.match(content, /navigator\.clipboard\?\.writeText/);
-  assert.match(content, /document\.execCommand\?\.\('copy'\)/);
-  assert.match(content, /lastContextMenuTarget\.isConnected/);
-  assert.match(content, /HIGHLIGHT_DURATION_MS = 3000/);
-  assert.match(content, /showElementHighlight\(lastContextMenuTarget\)/);
-  assert.match(content, /requestAnimationFrame\(updatePosition\)/);
-  assert.match(content, /setTimeout\(removeHighlight, durationMs \+ 150\)/);
-  assert.match(content, /border: 3px solid #fff/);
-  assert.match(content, /0 0 0 3px #000/);
-  assert.match(content, /@keyframes element-inspector-highlight-pulse/);
-  assert.match(content, /100% \{\s*opacity: 0;/);
-  assert.match(content, /animation: element-inspector-highlight-pulse \$\{durationMs\}ms ease-in-out forwards/);
-  assert.match(content, /marker\.addEventListener\('animationend', removeHighlight/);
-  assert.doesNotMatch(content, /element\.style\./);
+  assert.match(content, /URL\.createObjectURL/);
   assert.doesNotMatch(runtimeSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon/);
   assert.doesNotMatch(runtimeSource, /localStorage|sessionStorage|chrome\.storage/);
 });
