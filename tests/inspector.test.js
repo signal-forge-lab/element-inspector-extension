@@ -163,10 +163,14 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   const content = fs.readFileSync(path.join(root, 'content.js'), 'utf8');
   const inspectorSource = fs.readFileSync(path.join(root, 'inspector.js'), 'utf8');
   const runtimeSource = `${background}\n${content}\n${inspectorSource}`;
+  const highlightCss = content.slice(
+    content.indexOf('.highlight {'),
+    content.indexOf('.panel {')
+  );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.6.1');
-  assert.equal(pkg.version, '0.6.1');
+  assert.equal(manifest.version, '0.6.2');
+  assert.equal(pkg.version, '0.6.2');
   assert.deepEqual(manifest.permissions, ['clipboardWrite']);
   assert.equal(manifest.content_scripts[0].all_frames, undefined);
   assert.doesNotMatch(background, /contextMenus/);
@@ -174,11 +178,12 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(background, /ELEMENT_INSPECTOR_TOGGLE/);
   assert.match(background, /\{ frameId: 0 \}/);
   assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/);
-  assert.match(content, /@property --ei-angle/);
-  assert.match(content, /conic-gradient\(from var\(--ei-angle\)/);
-  assert.match(content, /ei-rainbow-spin 1\.25s linear infinite/);
-  assert.doesNotMatch(content, /ei-rainbow-breathe/);
-  assert.doesNotMatch(content, /\.highlight\s*\{[^}]*opacity\s*:/);
+  assert.match(content, /@keyframes ei-rainbow-flow-x/);
+  assert.match(content, /@keyframes ei-rainbow-flow-y/);
+  assert.match(content, /for \(const side of \['top', 'right', 'bottom', 'left'\]\)/);
+  assert.match(content, /edge\.className = `highlight-edge \$\{side\}`/);
+  assert.doesNotMatch(highlightCss, /mask-composite|webkit-mask|conic-gradient|drop-shadow/);
+  assert.doesNotMatch(highlightCss, /opacity\s*:/);
   assert.match(content, /selectedElement\?\.parentElement/);
   assert.match(content, /selectedElement\?\.firstElementChild/);
   assert.match(content, /countdownDeadline/);

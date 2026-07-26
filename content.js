@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.6.1';
+  const EXTENSION_VERSION = '0.6.2';
   const TOGGLE_MESSAGE_TYPE = 'ELEMENT_INSPECTOR_TOGGLE';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -492,27 +492,49 @@
 
     const style = document.createElement('style');
     style.textContent = `
-      @property --ei-angle {
-        syntax: '<angle>';
-        initial-value: 0deg;
-        inherits: false;
+      @keyframes ei-rainbow-flow-x {
+        to { background-position: -300% 0; }
       }
-      @keyframes ei-rainbow-spin { to { --ei-angle: 360deg; } }
+      @keyframes ei-rainbow-flow-y {
+        to { background-position: 0 -300%; }
+      }
       * { box-sizing: border-box; }
       .highlight {
         position: fixed;
         display: none;
         z-index: 1;
         pointer-events: none;
-        padding: 3px;
         border-radius: 8px;
-        background: conic-gradient(from var(--ei-angle), #ff375f, #ff9f0a, #ffd60a, #30d158, #64d2ff, #0a84ff, #bf5af2, #ff375f);
-        -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-        -webkit-mask-composite: xor;
-        mask-composite: exclude;
-        filter: brightness(1.12) saturate(1.28) drop-shadow(0 0 6px rgba(255,255,255,.42));
-        animation: ei-rainbow-spin 1.25s linear infinite;
+        overflow: hidden;
+        box-shadow: 0 0 0 1px rgba(0,0,0,.82), 0 0 9px rgba(255,255,255,.42);
       }
+      .highlight-edge {
+        position: absolute;
+        display: block;
+        pointer-events: none;
+      }
+      .highlight-edge.top,
+      .highlight-edge.bottom {
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #ff375f, #ff9f0a, #ffd60a, #30d158, #64d2ff, #0a84ff, #bf5af2, #ff375f);
+        background-size: 300% 100%;
+        animation: ei-rainbow-flow-x 1.5s linear infinite;
+      }
+      .highlight-edge.top { top: 0; }
+      .highlight-edge.bottom { bottom: 0; animation-direction: reverse; }
+      .highlight-edge.left,
+      .highlight-edge.right {
+        top: 3px;
+        bottom: 3px;
+        width: 3px;
+        background: linear-gradient(180deg, #ff375f, #ff9f0a, #ffd60a, #30d158, #64d2ff, #0a84ff, #bf5af2, #ff375f);
+        background-size: 100% 300%;
+        animation: ei-rainbow-flow-y 1.5s linear infinite;
+      }
+      .highlight-edge.left { left: 0; animation-direction: reverse; }
+      .highlight-edge.right { right: 0; }
       .panel {
         position: fixed;
         top: 14px;
@@ -660,6 +682,11 @@
     ui.marker = document.createElement('div');
     ui.marker.className = 'highlight';
     ui.marker.setAttribute('aria-hidden', 'true');
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      const edge = document.createElement('span');
+      edge.className = `highlight-edge ${side}`;
+      ui.marker.appendChild(edge);
+    }
 
     ui.panel = document.createElement('section');
     ui.panel.className = 'panel';
