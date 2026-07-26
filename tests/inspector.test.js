@@ -165,8 +165,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   const runtimeSource = `${background}\n${content}\n${inspectorSource}`;
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.6.0');
-  assert.equal(pkg.version, '0.6.0');
+  assert.equal(manifest.version, '0.6.1');
+  assert.equal(pkg.version, '0.6.1');
   assert.deepEqual(manifest.permissions, ['clipboardWrite']);
   assert.equal(manifest.content_scripts[0].all_frames, undefined);
   assert.doesNotMatch(background, /contextMenus/);
@@ -177,6 +177,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /@property --ei-angle/);
   assert.match(content, /conic-gradient\(from var\(--ei-angle\)/);
   assert.match(content, /ei-rainbow-spin 1\.25s linear infinite/);
+  assert.doesNotMatch(content, /ei-rainbow-breathe/);
+  assert.doesNotMatch(content, /\.highlight\s*\{[^}]*opacity\s*:/);
   assert.match(content, /selectedElement\?\.parentElement/);
   assert.match(content, /selectedElement\?\.firstElementChild/);
   assert.match(content, /countdownDeadline/);

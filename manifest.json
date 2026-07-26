@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Element Inspector",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Open an in-page inspector, select DOM elements, navigate the hierarchy, and export formatted JSON.",
   "icons": {
     "16": "assets/icons/main-icon.png",

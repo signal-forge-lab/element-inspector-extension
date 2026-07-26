@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.6.0';
+  const EXTENSION_VERSION = '0.6.1';
   const TOGGLE_MESSAGE_TYPE = 'ELEMENT_INSPECTOR_TOGGLE';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -498,10 +498,6 @@
         inherits: false;
       }
       @keyframes ei-rainbow-spin { to { --ei-angle: 360deg; } }
-      @keyframes ei-rainbow-breathe {
-        0%, 100% { filter: brightness(1) saturate(1.1) drop-shadow(0 0 4px rgba(255,255,255,.38)); }
-        50% { filter: brightness(1.35) saturate(1.45) drop-shadow(0 0 9px rgba(122,162,247,.62)); }
-      }
       * { box-sizing: border-box; }
       .highlight {
         position: fixed;
@@ -514,7 +510,8 @@
         -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
         -webkit-mask-composite: xor;
         mask-composite: exclude;
-        animation: ei-rainbow-spin 1.25s linear infinite, ei-rainbow-breathe 1.6s ease-in-out infinite;
+        filter: brightness(1.12) saturate(1.28) drop-shadow(0 0 6px rgba(255,255,255,.42));
+        animation: ei-rainbow-spin 1.25s linear infinite;
       }
       .panel {
         position: fixed;
