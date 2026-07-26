@@ -1,5 +1,9 @@
 # Element Inspector 開発者ガイド
 
+## バージョン
+
+`0.8.0`
+
 ## 構成
 
 ```text
@@ -11,82 +15,222 @@ element_inspector_extension/
 ├─ package.json
 ├─ README.md
 ├─ DEVELOPER_GUIDE.md
+├─ THIRD_PARTY_NOTICES.md
+├─ skills-lock.json
+├─ .agents/skills/apple-design/SKILL.md
 ├─ assets/icons/main-icon.png
 └─ tests/inspector.test.js
 ```
 
-## 処理経路
+## 全体アーキテクチャ
 
 ```text
-ツールバーアイコン
+Toolbar action
 ↓
-background.jsがトップフレームへELEMENT_INSPECTOR_TOGGLEを送信
-↓
-content.jsがclosed Shadow DOM内に専用ウィンドウと強調枠を生成
-↓
-pointermove / focusinで対象を追跡
-↓
-通常選択はclickを抑止して固定
-遅延固定はページ操作を素通しし、0秒時点の対象を固定
-↓
-inspector.jsでDOM情報を生成
-↓
-専用ウィンドウへ表示、Clipboard APIまたはBlobで出力
+background.js
+├─ タブ単位のactive状態
+├─ activeFrameId
+├─ selectedFrameId
+├─ 全フレームbroadcast
+└─ 指定frameIdへのcommand routing
+
+Top frame content.js
+├─ Inspector window
+├─ UI state
+├─ countdown
+├─ export
+└─ frame result aggregation
+
+Child frame content.js
+├─ pointer/focus detection
+├─ local highlight overlay
+├─ click fixation
+├─ DOM analysis
+└─ parent frame context handshake
+
+inspector.js
+├─ DOM snapshot
+├─ CSS Selector
+├─ XPath
+├─ JS Path
+└─ hierarchy metadata
 ```
 
-## 責務
+## `background.js`
 
-### `background.js`
+### メッセージ契約
 
-- `chrome.action.onClicked`の処理
-- トップフレームへの起動・終了メッセージ送信
-- Content Scriptを利用できないページの警告ログ
+```text
+ELEMENT_INSPECTOR_SET_ACTIVE
+ELEMENT_INSPECTOR_QUERY_STATE
+ELEMENT_INSPECTOR_FRAME_READY
+ELEMENT_INSPECTOR_FRAME_EVENT
+ELEMENT_INSPECTOR_FRAME_COMMAND
+ELEMENT_INSPECTOR_TOP_EVENT
+ELEMENT_INSPECTOR_TOP_COMMAND
+```
 
-右クリックメニューは登録しません。
+### 状態
 
-### `content.js`
+タブごとに次を保持します。
 
-- 専用ウィンドウの生成・破棄
-- ヘッダドラッグによるウィンドウ移動
-- ホバー・フォーカス対象の追跡
-- 4辺独立で常時表示する虹色グラデーションアウトライン
-- クリック固定、親子移動
-- 遅延固定カウントダウン
-- JSONプレビュー、コピー、ダウンロード
+```js
+{
+  active: false,
+  activeFrameId: null,
+  selectedFrameId: null
+}
+```
 
-専用UIはclosed Shadow DOMへ配置し、ページ側CSSとの衝突を避けます。対象DOMのstyleは変更しません。強調枠は4本の`span`で構成し、各辺の背景位置だけを連続移動させます。
+- `activeFrameId`: 最後にホバー情報を送ったフレーム
+- `selectedFrameId`: 固定中の要素を所有するフレーム
 
-### `inspector.js`
+Service Worker再起動後でも、ツールバークリック時にトップフレームへ現在状態を問い合わせてから反転します。新しい子フレームが接続した場合も、トップフレーム状態から復元します。
+
+## `content.js`
+
+同じContent Scriptを全フレームで実行し、`window.top === window`とBackgroundから返る`frameId`で役割を分けます。
+
+### フレーム共通責務
+
+- 選択モード管理
+- pointermove / focusin追跡
+- クリック固定
+- local highlight overlay
+- DOM解析
+- 階層移動
+- Backgroundとのメッセージ通信
+
+### トップフレーム専用責務
+
+- Inspectorウィンドウ生成
+- Overview / Locators / JSONタブ
+- 遅延固定カウント
+- Locator単体コピー
+- JSONコピー・保存
+- ヘッダドラッグ
+
+### iframe経路
+
+各子フレームは親へ`postMessage`で`HELLO`を送り、親Content Scriptが`event.source`と`iframe.contentWindow`を照合します。
+
+親はiframe要素のCSS Selectorを生成し、既存の親経路へ追加して子へ返します。nested iframeで親経路の到着が遅れた場合は、登録済みの子フレームへ更新済みContextを再送します。
+
+この経路は診断情報であり、機密情報やDOM内容の転送には使用しません。
+
+## `inspector.js`
 
 Chrome APIに依存しないDOM解析モジュールです。ブラウザでは`globalThis.ElementInspector`、Nodeテストでは`module.exports`として公開します。
 
-## 選択モード
+### Locator API
 
-### 通常選択
+```js
+generateCssLocator(element)
+generateXPathLocator(element)
+generateJsPath(element, cssLocator)
+```
 
-`pointermove`または`focusin`で対象を更新し、`click`をcapture phaseで抑止して固定します。ページ本来のクリック動作は実行しません。
+返却形式：
 
-### 遅延固定
+```js
+{
+  value: '#save-button',
+  matchCount: 1,
+  unique: true,
+  scope: 'document'
+}
+```
 
-カウント中はクリックを抑止しません。ページ操作を行いながら対象を追跡し、期限到達時に最後のホバーまたはフォーカス対象を固定します。
+### CSS Selector
 
-## 親子移動
+現在のSelector Root内で`querySelectorAll()`を使って一致件数を検証します。候補はid、テスト属性、ARIA属性、安定class、一般属性、階層の順です。
 
-- 親: `selectedElement.parentElement`
-- 子: `selectedElement.firstElementChild`
+### XPath
 
-移動後は同じ解析処理を再実行します。
+Document内で`document.evaluate()`を使って一致件数を検証します。Shadow RootではXPathを生成せず、`unsupported: true`を返します。
 
-## ウィンドウ移動
+### JS Path
 
-ヘッダの`pointerdown`でドラッグを開始し、Pointer Captureを使って`pointermove`を追跡します。位置はビューポート内へクランプし、ウィンドウサイズ変更時も画面外へ出ないよう補正します。
+CSS Selectorから`document.querySelector()`式を生成します。iframe内ではそのiframe Document基準です。
+
+### 階層情報
+
+```js
+getNavigationState(element)
+```
+
+以下を返します。
+
+- 親の有無
+- 前後兄弟の有無
+- 兄弟内indexと総数
+- 子要素数
+- 最大80件の子要素summary
+
+## UI設計
+
+プロジェクト内の`apple-design`スキルを基準にしています。
+
+### 適用方針
+
+- ボタンは押下時点で即時フィードバック
+- ヘッダドラッグはPointer Captureで1:1追従
+- ドラッグ中にtransitionを使用しない
+- UIの出現アニメーションは短く、入力をロックしない
+- 半透明Materialは階層表現に限定
+- Overview / Locators / JSONへ情報を段階分離
+- `prefers-reduced-motion`で動きを抑制
+- `prefers-reduced-transparency`で不透明背景へ切替
+- `prefers-contrast`で境界を強化
+
+## 強調枠
+
+各Documentに独立したclosed Shadow DOMホストを配置します。
+
+```text
+top edge
+right edge
+bottom edge
+left edge
+```
+
+4本の線形グラデーション背景位置だけをアニメーションします。
+
+禁止している方式：
+
+- opacity点滅
+- mask-composite
+- conic-gradientのマスク抜き
+- filter / drop-shadowアニメーション
+- 対象DOMへのstyle書き込み
+
+## フレーム状態遷移
+
+```text
+idle
+↓ SET_ACTIVE
+picking
+↓ click
+fixed
+↓ START_PICKING
+picking
+
+picking
+↓ START_COUNTDOWN
+countdown
+↓ FIX_HOVER
+fixed
+```
+
+固定時はBackgroundが`selectedFrameId`を全フレームへ通知し、所有フレーム以外を`idle`へ移行させます。
 
 ## セキュリティ方針
 
 - 外部通信しない
 - Storage APIを使用しない
-- 対象DOMへstyleや属性を書き込まない
-- 結果をBackgroundへ送らない
+- 対象DOMへ永続的な属性やstyleを追加しない
+- 結果をBackgroundへ永続保存しない
+- iframe context handshakeはフレーム経路だけを扱う
 - クリップボード・ダウンロードはユーザー操作時だけ実行する
 
 ## テスト
@@ -96,4 +240,47 @@ npm run check
 npm test
 ```
 
-テストではDOM解析結果、Manifest権限、ツールバー起動経路、専用UI、明滅しない常時表示の虹色アウトライン、親子移動、遅延固定、ドラッグ、外部通信・永続保存の不在を確認します。
+テスト対象：
+
+- DOMスナップショット
+- CSS Selector / XPath / JS Path
+- Locator一意性
+- 兄弟・子要素ナビゲーションmetadata
+- Manifestの全フレーム設定
+- Background routing契約
+- iframe context handshake
+- 新UIのタブ・ドラッグ・Reduced Motion
+- 外部通信と永続保存の不在
+
+## 手動確認項目
+
+### Locator
+
+- 一意id
+- data-testid
+- 重複class
+- SVG
+- 属性値に引用符を含む要素
+
+### ナビゲーション
+
+- 親・前後兄弟
+- 最初と最後の子
+- 子一覧選択
+- 対象削除時の復帰
+
+### iframe
+
+- same-origin
+- cross-origin
+- nested
+- about:blank
+- iframe削除後
+
+### UI
+
+- ヘッダドラッグ
+- 小さいビューポート
+- Reduced Motion
+- Reduced Transparency
+- High Contrast

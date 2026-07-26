@@ -1,54 +1,112 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.6.2';
-  const TOGGLE_MESSAGE_TYPE = 'ELEMENT_INSPECTOR_TOGGLE';
+  const EXTENSION_VERSION = '0.8.0';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
+  const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
 
-  const state = {
-    open: false,
+  const MESSAGE = Object.freeze({
+    SET_ACTIVE: 'ELEMENT_INSPECTOR_SET_ACTIVE',
+    QUERY_STATE: 'ELEMENT_INSPECTOR_QUERY_STATE',
+    FRAME_READY: 'ELEMENT_INSPECTOR_FRAME_READY',
+    FRAME_EVENT: 'ELEMENT_INSPECTOR_FRAME_EVENT',
+    FRAME_COMMAND: 'ELEMENT_INSPECTOR_FRAME_COMMAND',
+    TOP_EVENT: 'ELEMENT_INSPECTOR_TOP_EVENT',
+    TOP_COMMAND: 'ELEMENT_INSPECTOR_TOP_COMMAND'
+  });
+
+  const frameState = {
+    active: false,
+    frameId: 0,
+    isTopFrame: window.top === window,
     mode: 'idle',
     hoveredElement: null,
     selectedElement: null,
     highlightedElement: null,
-    result: null,
-    countdownTimer: null,
-    countdownDeadline: 0,
-    countdownRemaining: 0,
     animationFrameId: null,
-    drag: null
+    host: null,
+    shadow: null,
+    marker: null,
+    frameToken: createToken(),
+    childFrameRequests: new Map(),
+    frameContext: {
+      depth: 0,
+      path: []
+    }
   };
 
   const ui = {
-    host: null,
-    shadow: null,
     panel: null,
     header: null,
-    marker: null,
     modeBadge: null,
+    targetName: null,
+    frameBadge: null,
     status: null,
-    tag: null,
-    identity: null,
-    rect: null,
-    text: null,
-    preview: null,
-    selectButton: null,
-    parentButton: null,
-    childButton: null,
+    pickButton: null,
     delayInput: null,
     delayButton: null,
-    copyButton: null,
-    downloadButton: null
+    tabButtons: [],
+    tabPanels: [],
+    parentButton: null,
+    previousButton: null,
+    nextButton: null,
+    firstChildButton: null,
+    lastChildButton: null,
+    childSelect: null,
+    siblingMetric: null,
+    childMetric: null,
+    tagValue: null,
+    identityValue: null,
+    rectValue: null,
+    textValue: null,
+    cssValue: null,
+    cssBadge: null,
+    xpathValue: null,
+    xpathBadge: null,
+    jsPathValue: null,
+    jsPathBadge: null,
+    jsonPreview: null,
+    result: null,
+    selectedFrameId: null,
+    countdownTimer: null,
+    countdownDeadline: 0,
+    countdownRemaining: 0,
+    drag: null,
+    activeTab: 'overview'
   };
+
+  function createToken() {
+    if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+    return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
 
   function isElement(value) {
     return value instanceof Element;
   }
 
+  function elementName(element) {
+    if (!isElement(element)) return '要素なし';
+    const summary = globalThis.ElementInspector?.summarizeElement?.(element);
+    return summary?.label || `<${element.localName || element.tagName?.toLowerCase() || 'element'}>`;
+  }
+
+  function identityFromAttributes(attributes = {}) {
+    const parts = [];
+    if (attributes.id) parts.push(`#${attributes.id}`);
+    if (attributes.class) {
+      const classText = String(attributes.class).trim().split(/\s+/).slice(0, 4).join('.');
+      if (classText) parts.push(`.${classText}`);
+    }
+    if (attributes['data-testid']) parts.push(`[data-testid="${attributes['data-testid']}"]`);
+    if (attributes['aria-label']) parts.push(`[aria-label="${attributes['aria-label']}"]`);
+    return parts.join(' ') || '識別属性なし';
+  }
+
   function isInspectorEvent(event) {
+    if (!frameState.host) return false;
     const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
-    return path.includes(ui.host) || path.some(item =>
+    return path.includes(frameState.host) || path.some(item =>
       isElement(item) && item.hasAttribute?.(ROOT_ATTRIBUTE)
     );
   }
@@ -56,212 +114,286 @@
   function resolveEventElement(event) {
     const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
     const pathElement = path.find(item =>
-      isElement(item) && item !== ui.host && !item.hasAttribute?.(ROOT_ATTRIBUTE)
+      isElement(item) && item !== frameState.host && !item.hasAttribute?.(ROOT_ATTRIBUTE)
     );
     if (pathElement) return pathElement;
     return isElement(event.target) ? event.target : event.target?.parentElement || null;
   }
 
-  function elementName(element) {
-    if (!isElement(element)) return 'なし';
-    const tag = element.localName || element.tagName?.toLowerCase() || 'element';
-    const id = element.id ? `#${element.id}` : '';
-    const classes = Array.from(element.classList || []).slice(0, 2);
-    const classText = classes.length ? `.${classes.join('.')}` : '';
-    return `<${tag}${id}${classText}>`;
+  function emitFrameEvent(event) {
+    chrome.runtime.sendMessage({ type: MESSAGE.FRAME_EVENT, event }, () => {
+      void chrome.runtime.lastError;
+    });
   }
 
-  function elementIdentity(element) {
-    if (!isElement(element)) return '—';
-    const parts = [];
-    if (element.id) parts.push(`#${element.id}`);
-    const classes = Array.from(element.classList || []).slice(0, 4);
-    if (classes.length) parts.push(`.${classes.join('.')}`);
-    const testId = element.getAttribute?.('data-testid');
-    if (testId) parts.push(`[data-testid="${testId}"]`);
-    return parts.join(' ') || '属性なし';
+  function sendTopCommand(command, payload = {}) {
+    chrome.runtime.sendMessage({ type: MESSAGE.TOP_COMMAND, command, ...payload }, () => {
+      void chrome.runtime.lastError;
+    });
   }
 
-  function normalizedText(element) {
-    return String(element?.textContent || '').replace(/\s+/g, ' ').trim();
+  function findFrameElement(sourceWindow) {
+    for (const frameElement of document.querySelectorAll('iframe, frame')) {
+      try {
+        if (frameElement.contentWindow === sourceWindow) return frameElement;
+      } catch {}
+    }
+    return null;
   }
 
-  function selectedRect(element) {
-    const rect = element.getBoundingClientRect();
+  function buildFramePathItem(frameElement) {
+    const css = globalThis.ElementInspector?.generateCssLocator?.(frameElement);
     return {
-      top: Math.round(rect.top),
-      left: Math.round(rect.left),
-      width: Math.round(rect.width),
-      height: Math.round(rect.height)
+      tagName: frameElement.localName || 'iframe',
+      css: css?.value || null,
+      name: frameElement.getAttribute('name') || null,
+      title: frameElement.getAttribute('title') || null,
+      src: frameElement.getAttribute('src') || null
     };
   }
 
-  function setStatus(message, kind = 'normal') {
-    if (!ui.status) return;
-    ui.status.textContent = message;
-    ui.status.dataset.kind = kind;
-  }
-
-  function setMode(mode) {
-    state.mode = mode;
-    if (!ui.modeBadge) return;
-
-    const labels = {
-      idle: 'IDLE',
-      picking: 'SELECTING',
-      fixed: 'FIXED',
-      countdown: `DELAY ${state.countdownRemaining}`
+  function respondWithFrameContext(sourceWindow, token) {
+    const frameElement = findFrameElement(sourceWindow);
+    if (!frameElement) return;
+    const context = {
+      depth: frameState.frameContext.depth + 1,
+      path: [
+        ...frameState.frameContext.path,
+        buildFramePathItem(frameElement)
+      ]
     };
-    ui.modeBadge.textContent = labels[mode] || mode.toUpperCase();
-    ui.modeBadge.dataset.mode = mode;
+    sourceWindow.postMessage({
+      channel: FRAME_CHANNEL,
+      type: 'CONTEXT',
+      token,
+      context
+    }, '*');
   }
 
-  function updateControls() {
-    const selected = isElement(state.selectedElement) && state.selectedElement.isConnected;
-    const hasResult = Boolean(state.result);
-    ui.parentButton.disabled = !selected || !state.selectedElement.parentElement;
-    ui.childButton.disabled = !selected || !state.selectedElement.firstElementChild;
-    ui.copyButton.disabled = !hasResult;
-    ui.downloadButton.disabled = !hasResult;
-    ui.selectButton.textContent = state.mode === 'picking' ? '選択中…' : '要素を選択';
-    ui.delayButton.textContent = state.mode === 'countdown'
-      ? `キャンセル (${state.countdownRemaining})`
-      : '秒後に固定';
+  function refreshChildFrameContexts() {
+    for (const [sourceWindow, token] of frameState.childFrameRequests) {
+      respondWithFrameContext(sourceWindow, token);
+    }
   }
 
-  function updateTargetView() {
-    const element = state.selectedElement;
-    if (!isElement(element) || !element.isConnected || !state.result) {
-      ui.tag.textContent = '未固定';
-      ui.identity.textContent = '—';
-      ui.rect.textContent = '—';
-      ui.text.textContent = '対象をホバーしてクリックしてください。';
-      ui.preview.textContent = '固定した要素のJSONがここに表示されます。';
-      updateControls();
+  function onFrameContextMessage(event) {
+    const data = event.data;
+    if (!data || data.channel !== FRAME_CHANNEL) return;
+
+    if (data.type === 'HELLO' && data.token && event.source) {
+      frameState.childFrameRequests.set(event.source, data.token);
+      respondWithFrameContext(event.source, data.token);
       return;
     }
 
-    const rect = selectedRect(element);
-    ui.tag.textContent = elementName(element);
-    ui.identity.textContent = elementIdentity(element);
-    ui.rect.textContent = `${rect.width} × ${rect.height}  (${rect.left}, ${rect.top})`;
-    ui.text.textContent = normalizedText(element).slice(0, 240) || 'テキストなし';
-    ui.preview.textContent = JSON.stringify(state.result, null, 2);
-    updateControls();
+    if (
+      data.type === 'CONTEXT' &&
+      event.source === window.parent &&
+      data.token === frameState.frameToken &&
+      data.context
+    ) {
+      frameState.frameContext = {
+        depth: Number.isInteger(data.context.depth) ? data.context.depth : 0,
+        path: Array.isArray(data.context.path) ? data.context.path : []
+      };
+      refreshChildFrameContexts();
+    }
   }
 
-  function clearCountdownTimer() {
-    if (state.countdownTimer !== null) {
-      clearInterval(state.countdownTimer);
-      state.countdownTimer = null;
-    }
-    state.countdownDeadline = 0;
-    state.countdownRemaining = 0;
+  function requestFrameContext() {
+    if (frameState.isTopFrame) return;
+    window.parent.postMessage({
+      channel: FRAME_CHANNEL,
+      type: 'HELLO',
+      token: frameState.frameToken
+    }, '*');
+  }
+
+  function buildFrameInfo() {
+    return {
+      frameId: frameState.frameId,
+      isTopFrame: frameState.isTopFrame,
+      url: location.href,
+      title: document.title || '',
+      depth: frameState.frameContext.depth,
+      path: frameState.frameContext.path
+    };
   }
 
   function setHighlightTarget(element) {
-    state.highlightedElement = isElement(element) && element.isConnected ? element : null;
-    if (!state.highlightedElement && ui.marker) ui.marker.style.display = 'none';
+    frameState.highlightedElement = isElement(element) && element.isConnected ? element : null;
+    if (!frameState.highlightedElement && frameState.marker) {
+      frameState.marker.style.display = 'none';
+    }
   }
 
-  function startPicking(message = '対象をホバーし、クリックして固定してください。') {
-    clearCountdownTimer();
-    state.hoveredElement = null;
-    state.selectedElement = null;
-    state.result = null;
+  function clearFrameSelection() {
+    frameState.hoveredElement = null;
+    frameState.selectedElement = null;
     setHighlightTarget(null);
-    setMode('picking');
-    setStatus(message);
-    updateTargetView();
   }
 
-  function inspectAndFix(element, reason = 'クリック') {
+  function startFramePicking(mode = 'picking') {
+    frameState.mode = mode;
+    clearFrameSelection();
+  }
+
+  function inspectAndSelect(element, reason = 'クリック') {
     if (!isElement(element) || !element.isConnected) {
-      startPicking('対象要素がページから削除されています。');
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        message: '対象要素がページから削除されています。'
+      });
+      startFramePicking('picking');
       return;
     }
     if (!globalThis.ElementInspector?.inspectElement) {
-      setStatus('要素解析モジュールを利用できません。', 'error');
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        message: '要素解析モジュールを利用できません。'
+      });
       return;
     }
 
-    clearCountdownTimer();
-    state.selectedElement = element;
-    state.hoveredElement = element;
-    state.result = globalThis.ElementInspector.inspectElement(element);
+    frameState.mode = 'fixed';
+    frameState.hoveredElement = element;
+    frameState.selectedElement = element;
     setHighlightTarget(element);
-    setMode('fixed');
-    setStatus(`${reason}で ${elementName(element)} を固定しました。`, 'success');
-    updateTargetView();
+
+    const result = globalThis.ElementInspector.inspectElement(element);
+    result.frame = buildFrameInfo();
+    result.locators.context = {
+      frameRelative: !frameState.isTopFrame,
+      frameId: frameState.frameId,
+      framePath: frameState.frameContext.path
+    };
+    emitFrameEvent({
+      kind: 'selected',
+      reason,
+      result
+    });
   }
 
-  function moveToParent() {
-    const parent = state.selectedElement?.parentElement;
-    if (!parent) {
-      setStatus('これ以上親の要素へ移動できません。', 'error');
-      return;
-    }
-    inspectAndFix(parent, '親へ移動');
-  }
-
-  function moveToChild() {
-    const child = state.selectedElement?.firstElementChild;
-    if (!child) {
-      setStatus('子要素がありません。', 'error');
-      return;
-    }
-    inspectAndFix(child, '子へ移動');
-  }
-
-  function countdownTick() {
-    if (state.mode !== 'countdown') return;
-    const remainingMs = state.countdownDeadline - Date.now();
-    const remaining = Math.max(0, Math.ceil(remainingMs / 1000));
-    if (remaining !== state.countdownRemaining) {
-      state.countdownRemaining = remaining;
-      setMode('countdown');
-      updateControls();
-    }
-
-    if (remainingMs > 0) return;
-
-    let target = state.hoveredElement;
-    const active = document.activeElement;
-    if ((!isElement(target) || !target.isConnected) && isElement(active) && !active.hasAttribute?.(ROOT_ATTRIBUTE)) {
-      target = active;
-    }
-
-    clearCountdownTimer();
-    if (isElement(target) && target.isConnected) {
-      inspectAndFix(target, '遅延固定');
-      return;
-    }
-    startPicking('カウント終了時に対象要素がありませんでした。もう一度選択してください。');
-  }
-
-  function toggleDelayedFix() {
-    if (state.mode === 'countdown') {
-      startPicking('遅延固定をキャンセルしました。');
+  function navigateSelection(direction) {
+    const selected = frameState.selectedElement;
+    if (!isElement(selected) || !selected.isConnected) {
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        message: '固定中の対象要素がありません。'
+      });
       return;
     }
 
-    const seconds = Math.min(60, Math.max(1, Number.parseInt(ui.delayInput.value, 10) || DEFAULT_DELAY_SECONDS));
-    ui.delayInput.value = String(seconds);
-    state.selectedElement = null;
-    state.result = null;
-    state.countdownDeadline = Date.now() + seconds * 1000;
-    state.countdownRemaining = seconds;
-    setMode('countdown');
-    setStatus('カウント中はページを通常操作できます。0秒時点でホバーまたはフォーカス中の要素を固定します。');
-    updateTargetView();
-    state.countdownTimer = setInterval(countdownTick, 100);
-    countdownTick();
+    const targetByDirection = {
+      parent: selected.parentElement,
+      previous: selected.previousElementSibling,
+      next: selected.nextElementSibling,
+      firstChild: selected.firstElementChild,
+      lastChild: selected.lastElementChild
+    };
+    const target = targetByDirection[direction] || null;
+    if (!target) {
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        message: 'その方向へ移動できる要素がありません。'
+      });
+      return;
+    }
+    inspectAndSelect(target, '階層移動');
+  }
+
+  function selectChildByIndex(index) {
+    const selected = frameState.selectedElement;
+    const child = selected?.children?.[index];
+    if (!isElement(child)) {
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        message: '指定された子要素が見つかりません。'
+      });
+      return;
+    }
+    inspectAndSelect(child, '子要素選択');
+  }
+
+  function onDocumentPointerMove(event) {
+    if (!frameState.active || (frameState.mode !== 'picking' && frameState.mode !== 'countdown')) return;
+    if (isInspectorEvent(event)) return;
+    const element = resolveEventElement(event);
+    if (!isElement(element) || element === frameState.hoveredElement) return;
+    frameState.hoveredElement = element;
+    setHighlightTarget(element);
+    emitFrameEvent({
+      kind: 'hover',
+      summary: globalThis.ElementInspector?.summarizeElement?.(element) || { label: elementName(element) },
+      frame: buildFrameInfo()
+    });
+  }
+
+  function onDocumentFocusIn(event) {
+    if (!frameState.active || (frameState.mode !== 'picking' && frameState.mode !== 'countdown')) return;
+    if (isInspectorEvent(event)) return;
+    const element = resolveEventElement(event);
+    if (!isElement(element)) return;
+    frameState.hoveredElement = element;
+    setHighlightTarget(element);
+    emitFrameEvent({
+      kind: 'hover',
+      summary: globalThis.ElementInspector?.summarizeElement?.(element) || { label: elementName(element) },
+      frame: buildFrameInfo()
+    });
+  }
+
+  function onDocumentClick(event) {
+    if (!frameState.active || frameState.mode !== 'picking' || isInspectorEvent(event)) return;
+    const element = resolveEventElement(event);
+    if (!isElement(element)) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    inspectAndSelect(element, 'クリック');
+  }
+
+  function onDocumentKeyDown(event) {
+    if (!frameState.active || !frameState.isTopFrame) return;
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    sendTopCommand('DEACTIVATE');
+  }
+
+  function updateHighlightPosition() {
+    if (!frameState.active || !frameState.marker) return;
+    const element = frameState.highlightedElement;
+    if (!isElement(element) || !element.isConnected) {
+      frameState.marker.style.display = 'none';
+      if (frameState.mode === 'fixed' && frameState.selectedElement && !frameState.selectedElement.isConnected) {
+        startFramePicking('picking');
+        emitFrameEvent({
+          kind: 'status',
+          status: 'error',
+          message: '固定した要素がページから削除されました。'
+        });
+      }
+    } else {
+      const rect = element.getBoundingClientRect();
+      const visible = rect.width > 0 && rect.height > 0;
+      frameState.marker.style.display = visible ? 'block' : 'none';
+      if (visible) {
+        frameState.marker.style.left = `${rect.left - 4}px`;
+        frameState.marker.style.top = `${rect.top - 4}px`;
+        frameState.marker.style.width = `${rect.width + 8}px`;
+        frameState.marker.style.height = `${rect.height + 8}px`;
+      }
+    }
+    frameState.animationFrameId = requestAnimationFrame(updateHighlightPosition);
   }
 
   function copyWithTextarea(text) {
     const parent = document.body || document.documentElement;
     if (!parent) return false;
-
     const previousFocus = document.activeElement;
     const textarea = document.createElement('textarea');
     textarea.setAttribute(ROOT_ATTRIBUTE, 'clipboard');
@@ -276,11 +408,9 @@
       height: '1px',
       opacity: '0'
     });
-
     parent.appendChild(textarea);
     textarea.focus({ preventScroll: true });
     textarea.select();
-
     let copied = false;
     try {
       copied = Boolean(document.execCommand?.('copy'));
@@ -303,31 +433,197 @@
     } catch (error) {
       clipboardError = error;
     }
-
     if (copyWithTextarea(text)) return;
-
     const detail = clipboardError instanceof Error ? clipboardError.message : '';
     throw new Error(detail
       ? `クリップボードへのコピーに失敗しました: ${detail}`
       : 'クリップボードへのコピーに失敗しました');
   }
 
-  async function copySelectedJson() {
-    if (!state.result) return;
-    try {
-      await copyText(JSON.stringify(state.result, null, 2));
-      setStatus('JSONをクリップボードへコピーしました。', 'success');
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error), 'error');
+  function setUIStatus(message, kind = 'normal') {
+    if (!ui.status) return;
+    ui.status.textContent = message;
+    ui.status.dataset.kind = kind;
+  }
+
+  function clearUICountdown() {
+    if (ui.countdownTimer !== null) {
+      clearInterval(ui.countdownTimer);
+      ui.countdownTimer = null;
+    }
+    ui.countdownDeadline = 0;
+    ui.countdownRemaining = 0;
+  }
+
+  function setUIMode(mode) {
+    if (!ui.modeBadge) return;
+    const labels = {
+      picking: 'SELECTING',
+      fixed: 'FIXED',
+      countdown: `DELAY ${ui.countdownRemaining}`,
+      idle: 'IDLE'
+    };
+    ui.modeBadge.dataset.mode = mode;
+    ui.modeBadge.textContent = labels[mode] || mode.toUpperCase();
+    if (ui.pickButton) ui.pickButton.dataset.active = mode === 'picking' ? 'true' : 'false';
+    if (ui.delayButton) {
+      ui.delayButton.textContent = mode === 'countdown'
+        ? `キャンセル ${ui.countdownRemaining}`
+        : '秒後に固定';
     }
   }
 
-  function downloadSelectedJson() {
-    if (!state.result) return;
-    const tag = state.result.selectedTag || 'element';
+  function frameBadgeText(frame) {
+    if (!frame || frame.isTopFrame) return 'TOP FRAME';
+    return `FRAME ${frame.frameId} · DEPTH ${frame.depth}`;
+  }
+
+  function locatorBadge(locator) {
+    if (!locator?.value) return 'UNAVAILABLE';
+    if (locator.unique) return 'UNIQUE';
+    if (Number.isInteger(locator.matchCount)) return `${locator.matchCount} MATCHES`;
+    return locator.scope?.toUpperCase() || 'READY';
+  }
+
+  function setLocatorView(valueNode, badgeNode, locator) {
+    valueNode.textContent = locator?.value || '生成できません';
+    badgeNode.textContent = locatorBadge(locator);
+    badgeNode.dataset.unique = locator?.unique ? 'true' : 'false';
+  }
+
+  function renderUI() {
+    if (!ui.panel) return;
+    const result = ui.result;
+    const hasResult = Boolean(result);
+
+    ui.parentButton.disabled = !result?.navigation?.hasParent;
+    ui.previousButton.disabled = !result?.navigation?.hasPreviousSibling;
+    ui.nextButton.disabled = !result?.navigation?.hasNextSibling;
+    ui.firstChildButton.disabled = !result?.navigation?.childCount;
+    ui.lastChildButton.disabled = !result?.navigation?.childCount;
+
+    ui.childSelect.disabled = !result?.navigation?.childCount;
+    ui.childSelect.replaceChildren(new Option('子要素を選択…', ''));
+    for (const child of result?.navigation?.children || []) {
+      ui.childSelect.appendChild(new Option(`${child.index + 1}. ${child.label}`, String(child.index)));
+    }
+
+    ui.siblingMetric.textContent = hasResult
+      ? `${result.navigation.siblingIndex + 1} / ${result.navigation.siblingCount}`
+      : '—';
+    ui.childMetric.textContent = hasResult
+      ? `${result.navigation.childCount}${result.navigation.childrenTruncated ? '+' : ''}`
+      : '—';
+
+    if (!hasResult) {
+      ui.tagValue.textContent = '未固定';
+      ui.identityValue.textContent = '—';
+      ui.rectValue.textContent = '—';
+      ui.textValue.textContent = 'ページ上の要素へポインターを移動してください。';
+      ui.frameBadge.textContent = 'TOP FRAME';
+      setLocatorView(ui.cssValue, ui.cssBadge, null);
+      setLocatorView(ui.xpathValue, ui.xpathBadge, null);
+      setLocatorView(ui.jsPathValue, ui.jsPathBadge, null);
+      ui.jsonPreview.textContent = '固定した要素のJSONがここに表示されます。';
+      return;
+    }
+
+    const rect = result.selectedRect;
+    ui.targetName.textContent = `<${result.selectedTag}>`;
+    ui.frameBadge.textContent = frameBadgeText(result.frame);
+    ui.tagValue.textContent = result.selectedTag || '—';
+    ui.identityValue.textContent = identityFromAttributes(result.selectedAttributes);
+    ui.rectValue.textContent = rect
+      ? `${rect.width} × ${rect.height} · ${rect.left}, ${rect.top}`
+      : '—';
+    ui.textValue.textContent = result.selectedText || 'テキストなし';
+    setLocatorView(ui.cssValue, ui.cssBadge, result.locators?.css);
+    setLocatorView(ui.xpathValue, ui.xpathBadge, result.locators?.xpath);
+    setLocatorView(ui.jsPathValue, ui.jsPathBadge, result.locators?.jsPath);
+    ui.jsonPreview.textContent = JSON.stringify(result, null, 2);
+  }
+
+  function setActiveTab(tabName) {
+    ui.activeTab = tabName;
+    for (const button of ui.tabButtons) {
+      button.dataset.active = button.dataset.tab === tabName ? 'true' : 'false';
+      button.setAttribute('aria-selected', button.dataset.active);
+    }
+    for (const panel of ui.tabPanels) {
+      panel.hidden = panel.dataset.panel !== tabName;
+    }
+  }
+
+  function beginPicking() {
+    clearUICountdown();
+    ui.result = null;
+    ui.selectedFrameId = null;
+    ui.targetName.textContent = 'Select an element';
+    setUIMode('picking');
+    setUIStatus('対象をホバーし、クリックして固定してください。');
+    renderUI();
+    sendTopCommand('START_PICKING');
+  }
+
+  function countdownTick() {
+    const remainingMs = ui.countdownDeadline - Date.now();
+    ui.countdownRemaining = Math.max(0, Math.ceil(remainingMs / 1000));
+    setUIMode('countdown');
+    if (remainingMs > 0) return;
+    clearUICountdown();
+    sendTopCommand('FIX_ACTIVE_HOVER');
+  }
+
+  function toggleCountdown() {
+    if (ui.countdownTimer !== null) {
+      beginPicking();
+      setUIStatus('遅延固定をキャンセルしました。');
+      return;
+    }
+    const seconds = Math.min(60, Math.max(1, Number.parseInt(ui.delayInput.value, 10) || DEFAULT_DELAY_SECONDS));
+    ui.delayInput.value = String(seconds);
+    ui.result = null;
+    ui.selectedFrameId = null;
+    ui.countdownRemaining = seconds;
+    ui.countdownDeadline = Date.now() + seconds * 1000;
+    setUIMode('countdown');
+    setUIStatus('ページを通常操作できます。0秒時点の要素を固定します。');
+    renderUI();
+    sendTopCommand('START_COUNTDOWN');
+    ui.countdownTimer = setInterval(countdownTick, 100);
+    countdownTick();
+  }
+
+  async function copyLocator(kind) {
+    const locator = ui.result?.locators?.[kind];
+    if (!locator?.value) {
+      setUIStatus('コピーできるLocatorがありません。', 'error');
+      return;
+    }
+    try {
+      await copyText(locator.value);
+      setUIStatus(`${kind === 'jsPath' ? 'JS Path' : kind.toUpperCase()}をコピーしました。`, 'success');
+    } catch (error) {
+      setUIStatus(error instanceof Error ? error.message : String(error), 'error');
+    }
+  }
+
+  async function copyJson() {
+    if (!ui.result) return;
+    try {
+      await copyText(JSON.stringify(ui.result, null, 2));
+      setUIStatus('JSONをクリップボードへコピーしました。', 'success');
+    } catch (error) {
+      setUIStatus(error instanceof Error ? error.message : String(error), 'error');
+    }
+  }
+
+  function downloadJson() {
+    if (!ui.result) return;
+    const tag = ui.result.selectedTag || 'element';
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `element-inspector-${tag}-${stamp}.json`;
-    const blob = new Blob([JSON.stringify(state.result, null, 2)], { type: 'application/json' });
+    const blob = new Blob([JSON.stringify(ui.result, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.setAttribute(ROOT_ATTRIBUTE, 'download');
@@ -338,69 +634,34 @@
     anchor.click();
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setStatus(`${filename} を保存しました。`, 'success');
+    setUIStatus(`${filename}を保存しました。`, 'success');
   }
 
-  function onDocumentPointerMove(event) {
-    if (!state.open || (state.mode !== 'picking' && state.mode !== 'countdown')) return;
-    if (isInspectorEvent(event)) return;
-    const element = resolveEventElement(event);
-    if (!isElement(element)) return;
-    state.hoveredElement = element;
-    setHighlightTarget(element);
-    if (state.mode === 'picking') {
-      setStatus(`${elementName(element)} をクリックすると固定します。`);
-    }
-  }
+  function handleTopEvent(event) {
+    if (!ui.panel || !event) return;
 
-  function onDocumentFocusIn(event) {
-    if (!state.open || (state.mode !== 'picking' && state.mode !== 'countdown')) return;
-    if (isInspectorEvent(event)) return;
-    const element = resolveEventElement(event);
-    if (!isElement(element)) return;
-    state.hoveredElement = element;
-    setHighlightTarget(element);
-  }
-
-  function onDocumentClick(event) {
-    if (!state.open || state.mode !== 'picking' || isInspectorEvent(event)) return;
-    const element = resolveEventElement(event);
-    if (!isElement(element)) return;
-    event.preventDefault();
-    event.stopImmediatePropagation();
-    inspectAndFix(element, 'クリック');
-  }
-
-  function onDocumentKeyDown(event) {
-    if (!state.open) return;
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      destroyInspector();
+    if (event.kind === 'hover') {
+      ui.targetName.textContent = event.summary?.label || 'Hovered element';
+      ui.frameBadge.textContent = frameBadgeText({ ...event.frame, frameId: event.frameId });
+      setUIStatus(ui.countdownTimer !== null
+        ? 'カウント終了時にこの要素を固定します。'
+        : 'クリックするとこの要素を固定します。');
       return;
     }
-    if (isInspectorEvent(event)) return;
-  }
 
-  function updateHighlightPosition() {
-    if (!state.open) return;
-    const element = state.highlightedElement;
-    if (!isElement(element) || !element.isConnected) {
-      ui.marker.style.display = 'none';
-      if (state.mode === 'fixed' && state.selectedElement && !state.selectedElement.isConnected) {
-        startPicking('固定した要素がページから削除されました。');
-      }
-    } else {
-      const rect = element.getBoundingClientRect();
-      const visible = rect.width > 0 && rect.height > 0;
-      ui.marker.style.display = visible ? 'block' : 'none';
-      if (visible) {
-        ui.marker.style.left = `${rect.left - 4}px`;
-        ui.marker.style.top = `${rect.top - 4}px`;
-        ui.marker.style.width = `${rect.width + 8}px`;
-        ui.marker.style.height = `${rect.height + 8}px`;
-      }
+    if (event.kind === 'selected' && event.result) {
+      clearUICountdown();
+      ui.result = event.result;
+      ui.selectedFrameId = event.frameId;
+      setUIMode('fixed');
+      setUIStatus(`${event.reason || '選択'}で対象を固定しました。`, 'success');
+      renderUI();
+      return;
     }
-    state.animationFrameId = requestAnimationFrame(updateHighlightPosition);
+
+    if (event.kind === 'status') {
+      setUIStatus(event.message || '状態を更新しました。', event.status || 'normal');
+    }
   }
 
   function clampPanelPosition(left, top) {
@@ -414,9 +675,9 @@
   }
 
   function beginPanelDrag(event) {
-    if (event.button !== 0 || event.target.closest?.('button')) return;
+    if (event.button !== 0 || event.target.closest?.('button, input, select')) return;
     const rect = ui.panel.getBoundingClientRect();
-    state.drag = {
+    ui.drag = {
       pointerId: event.pointerId,
       offsetX: event.clientX - rect.left,
       offsetY: event.clientY - rect.top
@@ -429,21 +690,21 @@
   }
 
   function movePanel(event) {
-    if (!state.drag || event.pointerId !== state.drag.pointerId) return;
+    if (!ui.drag || event.pointerId !== ui.drag.pointerId) return;
     const position = clampPanelPosition(
-      event.clientX - state.drag.offsetX,
-      event.clientY - state.drag.offsetY
+      event.clientX - ui.drag.offsetX,
+      event.clientY - ui.drag.offsetY
     );
     ui.panel.style.left = `${position.left}px`;
     ui.panel.style.top = `${position.top}px`;
   }
 
   function endPanelDrag(event) {
-    if (!state.drag || event.pointerId !== state.drag.pointerId) return;
+    if (!ui.drag || event.pointerId !== ui.drag.pointerId) return;
     try {
       ui.header.releasePointerCapture(event.pointerId);
     } catch {}
-    state.drag = null;
+    ui.drag = null;
   }
 
   function keepPanelInViewport() {
@@ -454,49 +715,14 @@
     ui.panel.style.top = `${position.top}px`;
   }
 
-  function createButton(label, handler, className = '') {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.textContent = label;
-    if (className) button.className = className;
-    button.addEventListener('click', handler);
-    return button;
-  }
-
-  function createInfoCell(label) {
-    const cell = document.createElement('div');
-    cell.className = 'info-cell';
-    const labelNode = document.createElement('span');
-    labelNode.className = 'info-label';
-    labelNode.textContent = label;
-    const valueNode = document.createElement('code');
-    valueNode.className = 'info-value';
-    cell.append(labelNode, valueNode);
-    return { cell, valueNode };
-  }
-
-  function createInspector() {
-    if (state.open) return;
-    state.open = true;
-
-    ui.host = document.createElement('div');
-    ui.host.setAttribute(ROOT_ATTRIBUTE, 'host');
-    Object.assign(ui.host.style, {
-      all: 'initial',
-      position: 'fixed',
-      inset: '0',
-      zIndex: '2147483647',
-      pointerEvents: 'none'
-    });
-    ui.shadow = ui.host.attachShadow({ mode: 'closed' });
-
+  function createStyles() {
     const style = document.createElement('style');
     style.textContent = `
-      @keyframes ei-rainbow-flow-x {
-        to { background-position: -300% 0; }
-      }
-      @keyframes ei-rainbow-flow-y {
-        to { background-position: 0 -300%; }
+      @keyframes ei-rainbow-flow-x { to { background-position: -300% 0; } }
+      @keyframes ei-rainbow-flow-y { to { background-position: 0 -300%; } }
+      @keyframes ei-panel-arrive {
+        from { opacity: 0; transform: scale(.985) translateY(-4px); }
+        to { opacity: 1; transform: scale(1) translateY(0); }
       }
       * { box-sizing: border-box; }
       .highlight {
@@ -506,29 +732,19 @@
         pointer-events: none;
         border-radius: 8px;
         overflow: hidden;
-        box-shadow: 0 0 0 1px rgba(0,0,0,.82), 0 0 9px rgba(255,255,255,.42);
+        box-shadow: 0 0 0 1px rgba(0,0,0,.86), 0 0 10px rgba(255,255,255,.38);
       }
-      .highlight-edge {
-        position: absolute;
-        display: block;
-        pointer-events: none;
-      }
-      .highlight-edge.top,
-      .highlight-edge.bottom {
-        left: 0;
-        right: 0;
-        height: 3px;
+      .highlight-edge { position: absolute; display: block; pointer-events: none; }
+      .highlight-edge.top, .highlight-edge.bottom {
+        left: 0; right: 0; height: 3px;
         background: linear-gradient(90deg, #ff375f, #ff9f0a, #ffd60a, #30d158, #64d2ff, #0a84ff, #bf5af2, #ff375f);
         background-size: 300% 100%;
         animation: ei-rainbow-flow-x 1.5s linear infinite;
       }
       .highlight-edge.top { top: 0; }
       .highlight-edge.bottom { bottom: 0; animation-direction: reverse; }
-      .highlight-edge.left,
-      .highlight-edge.right {
-        top: 3px;
-        bottom: 3px;
-        width: 3px;
+      .highlight-edge.left, .highlight-edge.right {
+        top: 3px; bottom: 3px; width: 3px;
         background: linear-gradient(180deg, #ff375f, #ff9f0a, #ffd60a, #30d158, #64d2ff, #0a84ff, #bf5af2, #ff375f);
         background-size: 100% 300%;
         animation: ei-rainbow-flow-y 1.5s linear infinite;
@@ -537,357 +753,541 @@
       .highlight-edge.right { right: 0; }
       .panel {
         position: fixed;
-        top: 14px;
-        right: 14px;
+        top: 16px;
+        right: 16px;
         z-index: 2;
-        width: 404px;
-        max-width: calc(100vw - 28px);
-        max-height: calc(100vh - 28px);
+        width: 456px;
+        max-width: calc(100vw - 32px);
+        max-height: calc(100vh - 32px);
         overflow: hidden;
         pointer-events: auto;
-        border: 1px solid #3a414a;
-        border-radius: 15px;
+        color: #f1f3f5;
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 18px;
         background:
-          radial-gradient(circle at 15% 0%, rgba(122,162,247,.08), transparent 36%),
-          linear-gradient(145deg, rgba(255,255,255,.024), transparent 38%),
-          #1e2126;
-        color: #e7e9ec;
-        box-shadow: 0 24px 74px rgba(0,0,0,.54), 0 0 0 1px rgba(255,255,255,.025) inset;
+          radial-gradient(circle at 18% 0%, rgba(120,150,205,.12), transparent 34%),
+          rgba(24,27,32,.9);
+        backdrop-filter: blur(26px) saturate(145%);
+        -webkit-backdrop-filter: blur(26px) saturate(145%);
+        box-shadow: 0 28px 80px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.08) inset;
         font: 12px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+        font-optical-sizing: auto;
+        animation: ei-panel-arrive 180ms cubic-bezier(.2,.8,.2,1) both;
       }
-      .panel::after {
-        content: '';
-        position: absolute;
-        inset: 0;
-        z-index: -1;
-        pointer-events: none;
-        opacity: .16;
-        background-image: repeating-linear-gradient(115deg, rgba(255,255,255,.025) 0 1px, transparent 1px 4px);
-        mix-blend-mode: soft-light;
-      }
-      .header {
+      .titlebar {
+        position: relative;
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 10px;
-        min-height: 50px;
-        padding: 10px 11px 10px 15px;
-        border-bottom: 1px solid #3a414a;
-        background: linear-gradient(180deg, #272c33, #23272d);
+        gap: 12px;
+        min-height: 60px;
+        padding: 11px 12px 11px 15px;
         cursor: grab;
         user-select: none;
         touch-action: none;
       }
-      .header:active { cursor: grabbing; }
-      .title-wrap { min-width: 0; }
-      .title-line { display: flex; align-items: center; gap: 8px; }
-      .app-mark {
-        width: 21px;
-        height: 21px;
-        border: 1px solid #596471;
-        border-radius: 6px;
-        background: conic-gradient(from 45deg, #536d9c, #2f3a49, #7a8797, #536d9c);
-        box-shadow: 0 0 0 1px rgba(255,255,255,.08) inset;
+      .titlebar::after {
+        content: '';
+        position: absolute;
+        left: 14px; right: 14px; bottom: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,.12) 14%, rgba(255,255,255,.12) 86%, transparent);
       }
-      .title { color: #f4f5f7; font-size: 13px; font-weight: 680; letter-spacing: .01em; }
-      .subtitle { display: block; margin-top: 2px; color: #89929e; font-size: 10px; }
-      button, input { font: inherit; }
-      button {
-        min-height: 31px;
-        border: 1px solid #48515d;
-        border-radius: 8px;
-        padding: 5px 10px;
-        background: linear-gradient(180deg, #30363e, #292e35);
-        color: #e7e9ec;
-        box-shadow: 0 1px 0 rgba(255,255,255,.045) inset;
-        cursor: pointer;
-      }
-      button:hover:not(:disabled) { background: #343b44; border-color: #5d6875; }
-      button:active:not(:disabled) { transform: translateY(1px); }
-      button:focus-visible, input:focus-visible { outline: 2px solid #7aa2f7; outline-offset: 1px; }
-      button:disabled { opacity: .4; cursor: default; }
-      button.primary { background: linear-gradient(180deg, #3a4d70, #30415f); border-color: #5a75a7; }
-      button.close { min-width: 31px; padding: 3px 8px; font-size: 18px; line-height: 1; }
-      .body { max-height: calc(100vh - 78px); overflow: auto; padding: 12px; }
-      .status-card {
-        display: flex;
-        align-items: flex-start;
-        gap: 9px;
-        margin-bottom: 10px;
-        border: 1px solid #343b44;
-        border-radius: 11px;
-        padding: 9px;
-        background: rgba(36,40,46,.84);
-      }
-      .badge {
+      .titlebar:active { cursor: grabbing; }
+      .brand-mark {
         flex: 0 0 auto;
-        border: 1px solid #4b5663;
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid rgba(255,255,255,.15);
+        border-radius: 10px;
+        background: linear-gradient(145deg, rgba(126,157,213,.28), rgba(61,70,84,.34));
+        box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, 0 8px 20px rgba(0,0,0,.22);
+      }
+      .brand-mark::before {
+        content: '';
+        width: 15px;
+        height: 15px;
+        border: 1.5px solid #dbe4f5;
+        border-radius: 4px;
+        box-shadow: 5px 5px 0 -3px #8ba7d9;
+      }
+      .brand-copy { min-width: 0; flex: 1; }
+      .brand-title { display: block; font-size: 13px; font-weight: 680; letter-spacing: -.012em; }
+      .brand-subtitle { display: block; margin-top: 2px; color: #929ba7; font-size: 10px; letter-spacing: .018em; }
+      .title-actions { display: flex; align-items: center; gap: 8px; }
+      .mode-pill, .frame-pill, .locator-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 22px;
+        border: 1px solid rgba(255,255,255,.11);
         border-radius: 999px;
-        padding: 2px 7px;
-        background: #252a31;
-        color: #aeb6c0;
+        padding: 3px 8px;
+        background: rgba(255,255,255,.045);
+        color: #aab2bd;
         font-size: 9px;
-        letter-spacing: .07em;
+        font-weight: 650;
+        letter-spacing: .075em;
+        white-space: nowrap;
       }
-      .badge[data-mode="picking"] { border-color: #536d9c; color: #a9c2ff; }
-      .badge[data-mode="fixed"] { border-color: #48745e; color: #9dd8b6; }
-      .badge[data-mode="countdown"] { border-color: #8b7041; color: #ffd38b; }
-      .status { min-height: 28px; color: #a9b0ba; }
-      .status[data-kind="success"] { color: #9dd8b6; }
-      .status[data-kind="error"] { color: #ffaaa1; }
-      .section {
-        margin-top: 9px;
-        border: 1px solid #343b44;
+      .mode-pill[data-mode="picking"] { color: #b9cdf4; border-color: rgba(122,162,247,.38); }
+      .mode-pill[data-mode="fixed"] { color: #a8dfbf; border-color: rgba(75,180,123,.34); }
+      .mode-pill[data-mode="countdown"] { color: #ffd58d; border-color: rgba(226,169,69,.38); }
+      button, input, select { font: inherit; }
+      button {
+        min-height: 32px;
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 9px;
+        padding: 6px 10px;
+        background: rgba(255,255,255,.06);
+        color: #e9ecef;
+        box-shadow: 0 1px 0 rgba(255,255,255,.055) inset;
+        cursor: pointer;
+        transition: background 120ms ease, border-color 120ms ease, transform 90ms ease;
+      }
+      button:hover:not(:disabled) { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.19); }
+      button:active:not(:disabled) { transform: scale(.97); }
+      button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #8fb4f7; outline-offset: 2px; }
+      button:disabled { opacity: .34; cursor: default; }
+      button.primary { background: linear-gradient(180deg, rgba(91,126,187,.72), rgba(65,91,139,.72)); border-color: rgba(137,176,241,.52); }
+      button.primary[data-active="true"] { box-shadow: 0 0 0 2px rgba(122,162,247,.18), 0 1px 0 rgba(255,255,255,.09) inset; }
+      button.icon { width: 32px; min-width: 32px; padding: 0; font-size: 17px; line-height: 1; }
+      .workspace { max-height: calc(100vh - 92px); overflow: auto; padding: 12px 14px 14px; }
+      .target-card {
+        border: 1px solid rgba(255,255,255,.095);
+        border-radius: 14px;
+        padding: 12px;
+        background: rgba(255,255,255,.035);
+        box-shadow: 0 1px 0 rgba(255,255,255,.035) inset;
+      }
+      .target-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .eyebrow { color: #7f8996; font-size: 9px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
+      .target-name { display: block; margin-top: 4px; overflow: hidden; color: #f7f8fa; font: 600 14px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow: ellipsis; white-space: nowrap; }
+      .status { min-height: 34px; margin-top: 9px; color: #aab1bb; }
+      .status[data-kind="success"] { color: #a5dcbc; }
+      .status[data-kind="error"] { color: #ffb0a8; }
+      .command-row { display: grid; grid-template-columns: minmax(0,1fr) 150px; gap: 8px; margin-top: 10px; }
+      .delay-control { display: grid; grid-template-columns: 48px 1fr; gap: 6px; }
+      input, select {
+        width: 100%;
+        min-height: 32px;
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 9px;
+        padding: 6px 8px;
+        background: rgba(8,10,13,.46);
+        color: #edf0f3;
+      }
+      .tabs {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 3px;
+        margin-top: 12px;
+        border: 1px solid rgba(255,255,255,.09);
         border-radius: 11px;
-        padding: 10px;
-        background: rgba(31,35,41,.86);
+        padding: 3px;
+        background: rgba(7,9,12,.3);
       }
-      .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
-      .section-title { margin: 0; color: #89929e; font-size: 10px; font-weight: 680; letter-spacing: .075em; text-transform: uppercase; }
-      .section-hint { color: #697480; font-size: 9px; }
-      .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-      .info-cell { min-width: 0; border: 1px solid #303740; border-radius: 9px; padding: 7px 8px; background: #24282e; }
+      .tabs button { min-height: 30px; border: 0; background: transparent; color: #8f98a4; box-shadow: none; }
+      .tabs button[data-active="true"] { background: rgba(255,255,255,.085); color: #f1f3f5; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
+      .tab-panel { margin-top: 10px; }
+      .tab-panel[hidden] { display: none; }
+      .card {
+        margin-top: 8px;
+        border: 1px solid rgba(255,255,255,.085);
+        border-radius: 13px;
+        padding: 11px;
+        background: rgba(9,11,14,.26);
+      }
+      .card:first-child { margin-top: 0; }
+      .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+      .card-title { margin: 0; color: #9aa3ae; font-size: 9px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
+      .metrics { display: flex; gap: 6px; color: #7f8995; font-size: 9px; }
+      .metrics b { color: #c8ced6; font-weight: 650; }
+      .nav-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+      .nav-grid button { min-width: 0; padding-inline: 4px; font-size: 10px; }
+      .child-select { margin-top: 7px; }
+      .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .info-cell { min-width: 0; border: 1px solid rgba(255,255,255,.065); border-radius: 10px; padding: 8px; background: rgba(255,255,255,.025); }
       .info-cell.wide { grid-column: 1 / -1; }
-      .info-label { display: block; margin-bottom: 2px; color: #7f8995; font-size: 9px; text-transform: uppercase; }
-      .info-value { display: block; overflow: hidden; color: #dfe2e6; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; }
-      .target-text { min-height: 34px; max-height: 62px; overflow: auto; white-space: normal; }
-      .controls { display: flex; flex-wrap: wrap; gap: 6px; }
-      .delay-row { display: grid; grid-template-columns: 72px 1fr; gap: 6px; }
-      .delay-row input {
-        width: 100%;
-        min-height: 31px;
-        border: 1px solid #48515d;
-        border-radius: 8px;
-        padding: 5px 8px;
-        background: #171a1f;
-        color: #e7e9ec;
-      }
-      .json {
-        width: 100%;
-        max-height: 220px;
+      .info-label { display: block; color: #747e8a; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+      .info-value { display: block; margin-top: 3px; overflow: hidden; color: #dde1e6; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .info-value.wrap { max-height: 68px; overflow: auto; white-space: normal; overflow-wrap: anywhere; }
+      .locator-card { margin-top: 8px; }
+      .locator-card:first-child { margin-top: 0; }
+      .locator-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+      .locator-name { color: #c9cfd7; font-size: 10px; font-weight: 650; }
+      .locator-badge[data-unique="true"] { color: #a7debe; border-color: rgba(75,180,123,.32); }
+      .locator-body { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 7px; align-items: start; }
+      .code-box {
+        min-height: 44px;
+        max-height: 108px;
         margin: 0;
         overflow: auto;
-        border: 1px solid #303740;
+        border: 1px solid rgba(255,255,255,.07);
         border-radius: 9px;
-        padding: 9px;
-        background: #171a1f;
-        color: #cfd4da;
+        padding: 8px;
+        background: rgba(5,7,9,.46);
+        color: #d7dce3;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         font: 10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
       }
-      .footnote { margin-top: 9px; color: #6f7884; font-size: 10px; text-align: center; }
+      .json-toolbar { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 7px; }
+      .json-preview { max-height: 380px; }
+      .footnote { margin-top: 10px; color: #6f7884; font-size: 9px; text-align: center; }
+      @media (max-width: 540px) {
+        .panel { width: calc(100vw - 20px); top: 10px; right: 10px; max-width: none; }
+        .command-row { grid-template-columns: 1fr; }
+        .nav-grid { grid-template-columns: repeat(3, 1fr); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .panel { animation: none; }
+        button { transition: none; }
+        .highlight-edge { animation-duration: 4s !important; }
+      }
+      @media (prefers-reduced-transparency: reduce) {
+        .panel { background: #1b1e23; backdrop-filter: none; -webkit-backdrop-filter: none; }
+      }
+      @media (prefers-contrast: more) {
+        .panel { background: #111317; border-color: rgba(255,255,255,.38); }
+        .card, .target-card { border-color: rgba(255,255,255,.24); }
+      }
     `;
+    return style;
+  }
 
-    ui.marker = document.createElement('div');
-    ui.marker.className = 'highlight';
-    ui.marker.setAttribute('aria-hidden', 'true');
+  function createMarker() {
+    const marker = document.createElement('div');
+    marker.className = 'highlight';
+    marker.setAttribute('aria-hidden', 'true');
     for (const side of ['top', 'right', 'bottom', 'left']) {
       const edge = document.createElement('span');
       edge.className = `highlight-edge ${side}`;
-      ui.marker.appendChild(edge);
+      marker.appendChild(edge);
     }
+    return marker;
+  }
 
-    ui.panel = document.createElement('section');
-    ui.panel.className = 'panel';
-    ui.panel.setAttribute('role', 'dialog');
-    ui.panel.setAttribute('aria-label', 'Element Inspector');
+  function createPanel() {
+    const panel = document.createElement('section');
+    panel.className = 'panel';
+    panel.setAttribute('role', 'dialog');
+    panel.setAttribute('aria-label', 'Element Inspector');
+    panel.innerHTML = `
+      <header class="titlebar">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div class="brand-copy">
+          <strong class="brand-title">Element Inspector</strong>
+          <span class="brand-subtitle">v${EXTENSION_VERSION} · drag the header to move</span>
+        </div>
+        <div class="title-actions">
+          <span class="mode-pill" data-mode="picking">SELECTING</span>
+          <button class="icon" type="button" data-action="close" aria-label="閉じる">×</button>
+        </div>
+      </header>
+      <div class="workspace">
+        <section class="target-card">
+          <div class="target-row">
+            <div style="min-width:0;flex:1">
+              <span class="eyebrow">Current target</span>
+              <code class="target-name">Select an element</code>
+            </div>
+            <span class="frame-pill">TOP FRAME</span>
+          </div>
+          <div class="status" role="status">対象をホバーし、クリックして固定してください。</div>
+          <div class="command-row">
+            <button class="primary" type="button" data-action="pick" data-active="true">要素を選択</button>
+            <div class="delay-control">
+              <input type="number" min="1" max="60" value="${DEFAULT_DELAY_SECONDS}" aria-label="固定までの秒数">
+              <button type="button" data-action="delay">秒後に固定</button>
+            </div>
+          </div>
+        </section>
 
-    ui.header = document.createElement('header');
-    ui.header.className = 'header';
-    const titleWrap = document.createElement('div');
-    titleWrap.className = 'title-wrap';
-    const titleLine = document.createElement('div');
-    titleLine.className = 'title-line';
-    const appMark = document.createElement('span');
-    appMark.className = 'app-mark';
-    const title = document.createElement('strong');
-    title.className = 'title';
-    title.textContent = 'Element Inspector';
-    titleLine.append(appMark, title);
-    const subtitle = document.createElement('span');
-    subtitle.className = 'subtitle';
-    subtitle.textContent = `v${EXTENSION_VERSION} · ヘッダをドラッグして移動`;
-    titleWrap.append(titleLine, subtitle);
-    const closeButton = createButton('×', destroyInspector, 'close');
-    closeButton.setAttribute('aria-label', '閉じる');
-    ui.header.append(titleWrap, closeButton);
+        <nav class="tabs" role="tablist" aria-label="Inspector views">
+          <button type="button" role="tab" data-tab="overview" data-active="true">Overview</button>
+          <button type="button" role="tab" data-tab="locators" data-active="false">Locators</button>
+          <button type="button" role="tab" data-tab="json" data-active="false">JSON</button>
+        </nav>
 
-    const body = document.createElement('div');
-    body.className = 'body';
+        <div class="tab-panel" data-panel="overview">
+          <section class="card">
+            <div class="card-head">
+              <h2 class="card-title">Hierarchy</h2>
+              <div class="metrics"><span>Sibling <b data-value="sibling">—</b></span><span>Children <b data-value="children">—</b></span></div>
+            </div>
+            <div class="nav-grid">
+              <button type="button" data-nav="parent">親</button>
+              <button type="button" data-nav="previous">前の兄弟</button>
+              <button type="button" data-nav="next">次の兄弟</button>
+              <button type="button" data-nav="firstChild">最初の子</button>
+              <button type="button" data-nav="lastChild">最後の子</button>
+            </div>
+            <select class="child-select" aria-label="子要素を選択"></select>
+          </section>
+          <section class="card">
+            <div class="card-head"><h2 class="card-title">Snapshot</h2></div>
+            <div class="info-grid">
+              <div class="info-cell"><span class="info-label">Tag</span><code class="info-value" data-value="tag">未固定</code></div>
+              <div class="info-cell"><span class="info-label">Identity</span><code class="info-value" data-value="identity">—</code></div>
+              <div class="info-cell wide"><span class="info-label">Rect</span><code class="info-value" data-value="rect">—</code></div>
+              <div class="info-cell wide"><span class="info-label">Text</span><code class="info-value wrap" data-value="text">ページ上の要素へポインターを移動してください。</code></div>
+            </div>
+          </section>
+        </div>
 
-    const statusCard = document.createElement('div');
-    statusCard.className = 'status-card';
-    ui.modeBadge = document.createElement('span');
-    ui.modeBadge.className = 'badge';
-    ui.status = document.createElement('div');
-    ui.status.className = 'status';
-    statusCard.append(ui.modeBadge, ui.status);
+        <div class="tab-panel" data-panel="locators" hidden>
+          <section class="card locator-card" data-locator="css">
+            <div class="locator-head"><span class="locator-name">CSS Selector</span><span class="locator-badge">UNAVAILABLE</span></div>
+            <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="css">コピー</button></div>
+          </section>
+          <section class="card locator-card" data-locator="xpath">
+            <div class="locator-head"><span class="locator-name">XPath</span><span class="locator-badge">UNAVAILABLE</span></div>
+            <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="xpath">コピー</button></div>
+          </section>
+          <section class="card locator-card" data-locator="jsPath">
+            <div class="locator-head"><span class="locator-name">JS Path</span><span class="locator-badge">UNAVAILABLE</span></div>
+            <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="jsPath">コピー</button></div>
+          </section>
+        </div>
 
-    const targetSection = document.createElement('section');
-    targetSection.className = 'section';
-    const targetHead = document.createElement('div');
-    targetHead.className = 'section-head';
-    const targetTitle = document.createElement('h2');
-    targetTitle.className = 'section-title';
-    targetTitle.textContent = 'Target Snapshot';
-    const targetHint = document.createElement('span');
-    targetHint.className = 'section-hint';
-    targetHint.textContent = 'live selection';
-    targetHead.append(targetTitle, targetHint);
-    const infoGrid = document.createElement('div');
-    infoGrid.className = 'info-grid';
-    const tagCell = createInfoCell('Element');
-    ui.tag = tagCell.valueNode;
-    const identityCell = createInfoCell('Identity');
-    ui.identity = identityCell.valueNode;
-    const rectCell = createInfoCell('Rect');
-    ui.rect = rectCell.valueNode;
-    const textCell = createInfoCell('Text');
-    textCell.cell.classList.add('wide');
-    ui.text = textCell.valueNode;
-    ui.text.classList.add('target-text');
-    infoGrid.append(tagCell.cell, identityCell.cell, rectCell.cell, textCell.cell);
-    targetSection.append(targetHead, infoGrid);
+        <div class="tab-panel" data-panel="json" hidden>
+          <section class="card">
+            <div class="json-toolbar">
+              <button type="button" data-action="copy-json">JSONをコピー</button>
+              <button type="button" data-action="save-json">JSONを保存</button>
+            </div>
+            <pre class="code-box json-preview">固定した要素のJSONがここに表示されます。</pre>
+          </section>
+        </div>
 
-    const selectionSection = document.createElement('section');
-    selectionSection.className = 'section';
-    const selectionHead = document.createElement('div');
-    selectionHead.className = 'section-head';
-    const selectionTitle = document.createElement('h2');
-    selectionTitle.className = 'section-title';
-    selectionTitle.textContent = 'Selection';
-    const selectionHint = document.createElement('span');
-    selectionHint.className = 'section-hint';
-    selectionHint.textContent = 'hierarchy navigation';
-    selectionHead.append(selectionTitle, selectionHint);
-    const selectionControls = document.createElement('div');
-    selectionControls.className = 'controls';
-    ui.selectButton = createButton('要素を選択', () => startPicking(), 'primary');
-    ui.parentButton = createButton('親へ', moveToParent);
-    ui.childButton = createButton('子へ', moveToChild);
-    selectionControls.append(ui.selectButton, ui.parentButton, ui.childButton);
-    selectionSection.append(selectionHead, selectionControls);
+        <div class="footnote">local only · no storage · Esc to close</div>
+      </div>
+    `;
 
-    const delaySection = document.createElement('section');
-    delaySection.className = 'section';
-    const delayHead = document.createElement('div');
-    delayHead.className = 'section-head';
-    const delayTitle = document.createElement('h2');
-    delayTitle.className = 'section-title';
-    delayTitle.textContent = 'Delayed Fix';
-    const delayHint = document.createElement('span');
-    delayHint.className = 'section-hint';
-    delayHint.textContent = '1–60 sec';
-    delayHead.append(delayTitle, delayHint);
-    const delayRow = document.createElement('div');
-    delayRow.className = 'delay-row';
-    ui.delayInput = document.createElement('input');
-    ui.delayInput.type = 'number';
-    ui.delayInput.min = '1';
-    ui.delayInput.max = '60';
-    ui.delayInput.value = String(DEFAULT_DELAY_SECONDS);
-    ui.delayInput.setAttribute('aria-label', '固定までの秒数');
-    ui.delayButton = createButton('秒後に固定', toggleDelayedFix);
-    delayRow.append(ui.delayInput, ui.delayButton);
-    delaySection.append(delayHead, delayRow);
-
-    const exportSection = document.createElement('section');
-    exportSection.className = 'section';
-    const exportHead = document.createElement('div');
-    exportHead.className = 'section-head';
-    const exportTitle = document.createElement('h2');
-    exportTitle.className = 'section-title';
-    exportTitle.textContent = 'Export';
-    const exportHint = document.createElement('span');
-    exportHint.className = 'section-hint';
-    exportHint.textContent = 'local only';
-    exportHead.append(exportTitle, exportHint);
-    const exportControls = document.createElement('div');
-    exportControls.className = 'controls';
-    ui.copyButton = createButton('JSONをコピー', copySelectedJson, 'primary');
-    ui.downloadButton = createButton('JSONを保存', downloadSelectedJson);
-    exportControls.append(ui.copyButton, ui.downloadButton);
-    exportSection.append(exportHead, exportControls);
-
-    const jsonSection = document.createElement('section');
-    jsonSection.className = 'section';
-    const jsonHead = document.createElement('div');
-    jsonHead.className = 'section-head';
-    const jsonTitle = document.createElement('h2');
-    jsonTitle.className = 'section-title';
-    jsonTitle.textContent = 'JSON Preview';
-    const jsonHint = document.createElement('span');
-    jsonHint.className = 'section-hint';
-    jsonHint.textContent = 'formatted';
-    jsonHead.append(jsonTitle, jsonHint);
-    ui.preview = document.createElement('pre');
-    ui.preview.className = 'json';
-    jsonSection.append(jsonHead, ui.preview);
-
-    const footnote = document.createElement('div');
-    footnote.className = 'footnote';
-    footnote.textContent = '通常選択はクリックを抑止 · 遅延固定中はページ操作を許可 · Escで終了';
-
-    body.append(statusCard, targetSection, selectionSection, delaySection, exportSection, jsonSection, footnote);
-    ui.panel.append(ui.header, body);
-    ui.shadow.append(style, ui.marker, ui.panel);
-    document.documentElement.appendChild(ui.host);
+    ui.panel = panel;
+    ui.header = panel.querySelector('.titlebar');
+    ui.modeBadge = panel.querySelector('.mode-pill');
+    ui.targetName = panel.querySelector('.target-name');
+    ui.frameBadge = panel.querySelector('.frame-pill');
+    ui.status = panel.querySelector('.status');
+    ui.pickButton = panel.querySelector('[data-action="pick"]');
+    ui.delayInput = panel.querySelector('input[type="number"]');
+    ui.delayButton = panel.querySelector('[data-action="delay"]');
+    ui.tabButtons = Array.from(panel.querySelectorAll('[data-tab]'));
+    ui.tabPanels = Array.from(panel.querySelectorAll('[data-panel]'));
+    ui.parentButton = panel.querySelector('[data-nav="parent"]');
+    ui.previousButton = panel.querySelector('[data-nav="previous"]');
+    ui.nextButton = panel.querySelector('[data-nav="next"]');
+    ui.firstChildButton = panel.querySelector('[data-nav="firstChild"]');
+    ui.lastChildButton = panel.querySelector('[data-nav="lastChild"]');
+    ui.childSelect = panel.querySelector('.child-select');
+    ui.siblingMetric = panel.querySelector('[data-value="sibling"]');
+    ui.childMetric = panel.querySelector('[data-value="children"]');
+    ui.tagValue = panel.querySelector('[data-value="tag"]');
+    ui.identityValue = panel.querySelector('[data-value="identity"]');
+    ui.rectValue = panel.querySelector('[data-value="rect"]');
+    ui.textValue = panel.querySelector('[data-value="text"]');
+    ui.cssValue = panel.querySelector('[data-locator="css"] .code-box');
+    ui.cssBadge = panel.querySelector('[data-locator="css"] .locator-badge');
+    ui.xpathValue = panel.querySelector('[data-locator="xpath"] .code-box');
+    ui.xpathBadge = panel.querySelector('[data-locator="xpath"] .locator-badge');
+    ui.jsPathValue = panel.querySelector('[data-locator="jsPath"] .code-box');
+    ui.jsPathBadge = panel.querySelector('[data-locator="jsPath"] .locator-badge');
+    ui.jsonPreview = panel.querySelector('.json-preview');
 
     ui.header.addEventListener('pointerdown', beginPanelDrag);
     ui.header.addEventListener('pointermove', movePanel);
     ui.header.addEventListener('pointerup', endPanelDrag);
     ui.header.addEventListener('pointercancel', endPanelDrag);
-    ui.panel.addEventListener('pointerdown', event => event.stopPropagation());
-    ui.panel.addEventListener('click', event => event.stopPropagation());
-    ui.panel.addEventListener('wheel', event => event.stopPropagation());
+    panel.addEventListener('pointerdown', event => event.stopPropagation());
+    panel.addEventListener('click', event => event.stopPropagation());
+    panel.addEventListener('wheel', event => event.stopPropagation());
 
+    panel.querySelector('[data-action="close"]').addEventListener('click', () => sendTopCommand('DEACTIVATE'));
+    ui.pickButton.addEventListener('click', beginPicking);
+    ui.delayButton.addEventListener('click', toggleCountdown);
+    panel.querySelector('[data-action="copy-json"]').addEventListener('click', copyJson);
+    panel.querySelector('[data-action="save-json"]').addEventListener('click', downloadJson);
+    for (const button of ui.tabButtons) {
+      button.addEventListener('click', () => setActiveTab(button.dataset.tab));
+    }
+    for (const button of panel.querySelectorAll('[data-nav]')) {
+      button.addEventListener('click', () => sendTopCommand('NAVIGATE', { direction: button.dataset.nav }));
+    }
+    ui.childSelect.addEventListener('change', () => {
+      if (ui.childSelect.value === '') return;
+      sendTopCommand('SELECT_CHILD', { childIndex: Number.parseInt(ui.childSelect.value, 10) });
+      ui.childSelect.value = '';
+    });
+    for (const button of panel.querySelectorAll('[data-copy]')) {
+      button.addEventListener('click', () => copyLocator(button.dataset.copy));
+    }
+
+    renderUI();
+    return panel;
+  }
+
+  function createFrameRoot() {
+    if (frameState.host) return;
+    if (!document.documentElement) return;
+    frameState.host = document.createElement('div');
+    frameState.host.setAttribute(ROOT_ATTRIBUTE, 'host');
+    Object.assign(frameState.host.style, {
+      all: 'initial',
+      position: 'fixed',
+      inset: '0',
+      zIndex: '2147483647',
+      pointerEvents: 'none'
+    });
+    frameState.shadow = frameState.host.attachShadow({ mode: 'closed' });
+    frameState.shadow.appendChild(createStyles());
+    frameState.marker = createMarker();
+    frameState.shadow.appendChild(frameState.marker);
+    if (frameState.isTopFrame) frameState.shadow.appendChild(createPanel());
+    document.documentElement.appendChild(frameState.host);
+  }
+
+  function mountFrameRootWhenReady() {
+    if (!frameState.active || frameState.host) return;
+    if (!document.documentElement) {
+      document.addEventListener('readystatechange', mountFrameRootWhenReady, { once: true });
+      return;
+    }
+    createFrameRoot();
+    if (frameState.animationFrameId === null) {
+      frameState.animationFrameId = requestAnimationFrame(updateHighlightPosition);
+    }
+  }
+
+  function destroyFrameRoot() {
+    if (frameState.animationFrameId !== null) {
+      cancelAnimationFrame(frameState.animationFrameId);
+      frameState.animationFrameId = null;
+    }
+    frameState.host?.remove();
+    frameState.host = null;
+    frameState.shadow = null;
+    frameState.marker = null;
+    frameState.childFrameRequests.clear();
+    clearUICountdown();
+    for (const key of Object.keys(ui)) {
+      if (['activeTab'].includes(key)) continue;
+      if (key === 'tabButtons' || key === 'tabPanels') ui[key] = [];
+      else if (key === 'countdownTimer') ui[key] = null;
+      else if (key === 'countdownDeadline' || key === 'countdownRemaining') ui[key] = 0;
+      else ui[key] = null;
+    }
+    ui.activeTab = 'overview';
+  }
+
+  function setActive(active) {
+    if (frameState.active === active) return;
+    frameState.active = active;
+    if (!active) {
+      frameState.mode = 'idle';
+      clearFrameSelection();
+      destroyFrameRoot();
+      document.removeEventListener('pointermove', onDocumentPointerMove, true);
+      document.removeEventListener('focusin', onDocumentFocusIn, true);
+      document.removeEventListener('click', onDocumentClick, true);
+      document.removeEventListener('keydown', onDocumentKeyDown, true);
+      document.removeEventListener('readystatechange', mountFrameRootWhenReady);
+      window.removeEventListener('resize', keepPanelInViewport);
+      return;
+    }
+
+    startFramePicking('picking');
+    requestFrameContext();
     document.addEventListener('pointermove', onDocumentPointerMove, true);
     document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('click', onDocumentClick, true);
     document.addEventListener('keydown', onDocumentKeyDown, true);
-    window.addEventListener('resize', keepPanelInViewport);
-
-    state.animationFrameId = requestAnimationFrame(updateHighlightPosition);
-    startPicking();
+    if (frameState.isTopFrame) window.addEventListener('resize', keepPanelInViewport);
+    mountFrameRootWhenReady();
   }
 
-  function destroyInspector() {
-    if (!state.open) return;
-    clearCountdownTimer();
-    if (state.animationFrameId !== null) {
-      cancelAnimationFrame(state.animationFrameId);
-      state.animationFrameId = null;
+  function handleFrameCommand(message) {
+    if (!frameState.active) return;
+    const command = message.command;
+    if (command === 'START_PICKING') {
+      startFramePicking('picking');
+      return;
     }
-    document.removeEventListener('pointermove', onDocumentPointerMove, true);
-    document.removeEventListener('focusin', onDocumentFocusIn, true);
-    document.removeEventListener('click', onDocumentClick, true);
-    document.removeEventListener('keydown', onDocumentKeyDown, true);
-    window.removeEventListener('resize', keepPanelInViewport);
-    ui.host?.remove();
-
-    state.open = false;
-    state.mode = 'idle';
-    state.hoveredElement = null;
-    state.selectedElement = null;
-    state.highlightedElement = null;
-    state.result = null;
-    state.drag = null;
-    for (const key of Object.keys(ui)) ui[key] = null;
+    if (command === 'START_COUNTDOWN') {
+      startFramePicking('countdown');
+      return;
+    }
+    if (command === 'CLEAR_HOVER') {
+      if (frameState.mode === 'picking' || frameState.mode === 'countdown') {
+        frameState.hoveredElement = null;
+        setHighlightTarget(null);
+      }
+      return;
+    }
+    if (command === 'SYNC_SELECTED') {
+      if (frameState.frameId !== message.selectedFrameId) {
+        frameState.mode = 'idle';
+        clearFrameSelection();
+      } else {
+        frameState.mode = 'fixed';
+      }
+      return;
+    }
+    if (command === 'FIX_HOVER') {
+      if (isElement(frameState.hoveredElement) && frameState.hoveredElement.isConnected) {
+        inspectAndSelect(frameState.hoveredElement, '遅延固定');
+      } else {
+        emitFrameEvent({
+          kind: 'status',
+          status: 'error',
+          message: 'カウント終了時に対象要素が見つかりませんでした。'
+        });
+      }
+      return;
+    }
+    if (command === 'NAVIGATE') {
+      navigateSelection(message.direction);
+      return;
+    }
+    if (command === 'SELECT_CHILD') {
+      selectChildByIndex(message.childIndex);
+    }
   }
+
+  window.addEventListener('message', onFrameContextMessage);
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== TOGGLE_MESSAGE_TYPE) return undefined;
-    try {
-      if (state.open) destroyInspector();
-      else createInspector();
-      sendResponse({ ok: true, open: state.open });
-    } catch (error) {
-      const messageText = error instanceof Error ? error.message : String(error);
-      console.error('[Element Inspector]', error);
-      if (state.open) destroyInspector();
-      sendResponse({ ok: false, error: messageText });
+    if (message?.type === MESSAGE.QUERY_STATE) {
+      sendResponse({ ok: true, active: frameState.active });
+      return false;
     }
-    return false;
+    if (message?.type === MESSAGE.SET_ACTIVE) {
+      setActive(Boolean(message.active));
+      sendResponse({ ok: true, active: frameState.active });
+      return false;
+    }
+    if (message?.type === MESSAGE.FRAME_COMMAND) {
+      handleFrameCommand(message);
+      sendResponse({ ok: true });
+      return false;
+    }
+    if (message?.type === MESSAGE.TOP_EVENT && frameState.isTopFrame) {
+      handleTopEvent(message.event);
+      sendResponse({ ok: true });
+      return false;
+    }
+    return undefined;
   });
+
+  chrome.runtime.sendMessage({ type: MESSAGE.FRAME_READY }, response => {
+    if (chrome.runtime.lastError || !response?.ok) return;
+    frameState.frameId = response.frameId;
+    frameState.isTopFrame = Boolean(response.isTopFrame);
+    if (response.active) setActive(true);
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', requestFrameContext, { once: true });
+  }
 })();

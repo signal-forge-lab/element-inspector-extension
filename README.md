@@ -1,72 +1,206 @@
 # Element Inspector
 
-Chromeのツールバーアイコンから起動し、ページ上のDOM要素を視覚的に選択して、情報を整形済みJSONとしてコピー・保存するChrome拡張です。
+Chromeのツールバーから起動し、ページ上のDOM要素を視覚的に選択して、Locator・階層情報・DOMスナップショットを確認・コピー・保存するChrome拡張です。
+
+## 現在のバージョン
+
+`0.8.0`
 
 ## 起動
 
-1. Chromeで `chrome://extensions` を開きます。
+1. Chromeで`chrome://extensions`を開きます。
 2. 「デベロッパー モード」を有効にします。
 3. 「パッケージ化されていない拡張機能を読み込む」から、このフォルダを選択します。
 4. 対象ページでツールバーのElement Inspectorアイコンを押します。
 
-同じアイコンをもう一度押すと終了します。
+同じアイコンをもう一度押すか、専用ウィンドウの閉じるボタンまたは`Esc`で終了します。
 
 ## 操作
 
 ```text
 ツールバーアイコンを押す
 ↓
-Soft Graphite調の専用ウィンドウがページ上に表示
+ページ内に専用Inspectorウィンドウを表示
 ↓
-ホバー中の要素を常時表示の虹色アニメーション枠で強調
+ホバー中の要素を虹色アウトラインで常時強調
 ↓
-クリックしてターゲットを固定
+クリックして固定
 ↓
-情報確認・親子移動・JSONコピー・JSON保存
+Overview / Locators / JSONを確認
 ```
 
 ### 専用ウィンドウ
 
-- ヘッダをドラッグしてページ内の任意位置へ移動できます。
-- 対象要素、識別属性、座標、テキスト、JSONプレビューを表示します。
-- `要素を選択`で選択を再開します。
-- `親へ`で1階層上、`子へ`で最初の子要素へ移動します。
-- `JSONをコピー`でクリップボードへコピーします。
-- `JSONを保存`でローカルへダウンロードします。
-- `Esc`で終了します。
+- ヘッダをドラッグして移動できます。
+- `Overview`で対象情報と階層ナビゲーションを確認します。
+- `Locators`でCSS Selector、XPath、JS Pathを確認・コピーします。
+- `JSON`で全結果をコピーまたはファイル保存します。
+- `prefers-reduced-motion`、`prefers-reduced-transparency`、`prefers-contrast`へ対応します。
+
+UIはプロジェクト内の`apple-design`スキルを設計基準として、即時フィードバック、1:1ドラッグ、視覚階層、抑制されたマテリアル表現を重視しています。
+
+## 要素選択
+
+### 通常選択
+
+ホバーまたはフォーカス中の要素を強調し、クリックで固定します。固定に使用したクリックはページ本来の操作へ伝播しません。
 
 ### 遅延固定
 
-1〜60秒を指定して`秒後に固定`を押すと、カウント中はページ操作を通常どおり行えます。メニューを開くなどの操作後、0秒時点でホバーまたはフォーカスされている要素を自動的に固定します。
+1〜60秒を指定して`秒後に固定`を押すと、カウント中はページを通常操作できます。0秒時点で最後にホバーまたはフォーカスされた要素を固定します。
 
 ### 強調表示
 
-対象要素自体のstyleは変更しません。ページ上に独立したオーバーレイを重ね、4辺それぞれの虹色グラデーションを連続移動させます。枠は常時表示されたまま色だけが変化します。
+対象DOM自体のstyleは変更しません。各Document上に独立したオーバーレイを配置し、4辺のグラデーション背景だけを連続移動させます。
 
-## 取得項目
+- 明滅なし
+- opacityアニメーションなし
+- mask-composite不使用
+- iframe内ではiframe自身のビューポート内に表示
 
-- クリック対象のタグ、属性、テキスト、座標、`outerHTML`
-- 最も近い操作可能要素のタグ、属性、座標
-- SVG属性、`use`参照先、`path`、`circle`
-- 選択対象自身を`depth: 0`とする最大8階層の祖先情報
-- 操作可能要素の`outerHTML`先頭5000文字
+## 階層ナビゲーション
+
+固定後、次の移動ができます。
+
+- 親要素
+- 前の兄弟要素
+- 次の兄弟要素
+- 最初の子要素
+- 最後の子要素
+- 子要素一覧から任意の子を選択
+
+ウィンドウには兄弟内の現在位置と子要素数を表示します。移動するたびにDOM解析とLocator生成を再実行します。
+
+## Locator生成
+
+### CSS Selector
+
+現在のDocumentまたはSelector Root内で一意になる候補を優先します。
+
+優先順位の概要：
+
+```text
+一意なid
+data-testid / data-test / data-qa
+aria-label / name / title / alt
+安定したclass
+role / type / value / placeholder
+DOM階層 + nth-of-type
+```
+
+生成クラスと推定される値は低優先度にします。
+
+### XPath
+
+一意な属性ベースXPathを優先し、該当しない場合は絶対XPathを生成します。SVGなど名前空間を持つ要素では`local-name()`を使用します。
+
+### JS Path
+
+CSS Selectorを利用して、現在のDocument内で実行できる式を生成します。
+
+```js
+document.querySelector('[data-testid="save-button"]')
+```
+
+iframe内部で生成されたJS Pathは、そのiframeのDocument基準です。トップDocumentからクロスオリジンiframe内部へ直接到達する式ではありません。
+
+## iframe対応
+
+Content Scriptは一致する全フレームへ注入されます。
+
+対応対象：
+
+- トップフレーム
+- 同一オリジンiframe
+- クロスオリジンiframe
+- nested iframe
+- `about:blank`系フレーム
+- initiator originで一致する`data:`、`blob:`などのフレーム
+
+トップフレームはInspectorウィンドウと全体状態を管理し、各iframeは次を担当します。
+
+```text
+要素検出
+クリック固定
+アウトライン描画
+DOM解析
+Locator生成
+```
+
+iframe間の選択結果はBackground Service Workerを介してトップフレームへ集約します。nested iframeの経路は、親子フレーム間の`postMessage`ハンドシェイクで構築します。
+
+## JSON出力
+
+主要項目：
+
+```json
+{
+  "selectedTag": "button",
+  "selectedAttributes": {},
+  "selectedText": "保存",
+  "selectedRect": {},
+  "selectedOuterHTML": "<button>保存</button>",
+  "controlTag": "button",
+  "controlAttributes": {},
+  "controlRect": {},
+  "text": "保存",
+  "locators": {
+    "css": {
+      "value": "[data-testid=\"save-button\"]",
+      "matchCount": 1,
+      "unique": true,
+      "scope": "document"
+    },
+    "xpath": {
+      "value": "//*[@data-testid='save-button']",
+      "matchCount": 1,
+      "unique": true,
+      "scope": "document"
+    },
+    "jsPath": {
+      "value": "document.querySelector('[data-testid=\"save-button\"]')",
+      "scope": "document"
+    },
+    "context": {
+      "frameRelative": false,
+      "frameId": 0,
+      "framePath": []
+    }
+  },
+  "navigation": {},
+  "frame": {},
+  "svg": null,
+  "ancestors": [],
+  "outerHTML": "<button>保存</button>"
+}
+```
+
+制限：
+
+- `selectedOuterHTML`と`outerHTML`は最大5,000文字
+- `ancestors`は最大8階層
+- 子要素一覧は最大80件
+- 座標は各Documentのビューポート基準
 
 ## 権限とプライバシー
 
 - 使用権限は`clipboardWrite`のみです。
 - 外部通信を行いません。
-- 解析結果をサーバーへ送信しません。
-- localStorage、sessionStorage、Chrome Storageへ保存しません。
-- 履歴を永続化しません。
+- DOM解析結果をサーバーへ送信しません。
+- localStorage、sessionStorage、Chrome Storageを使用しません。
+- 履歴を永続保存しません。
+
+Content Scriptは`<all_urls>`へ宣言されます。これはツールバー起動後に、トップページとiframe内の対象要素を選択・解析するためです。
 
 解析結果にはページ内テキスト、属性、URL、内部IDなどが含まれる可能性があります。共有前に内容を確認してください。
 
 ## 制限
 
 - `chrome://`ページ、Chromeウェブストア、拡張機能管理ページなどでは利用できません。
-- 現在の専用ウィンドウはトップフレームで動作し、別iframe内部の要素選択には未対応です。
-- `子へ`は最初のElement子要素へ移動します。
-- closed Shadow DOM内部は解析できません。
+- closed Shadow DOM内部には対応していません。
+- open Shadow DOMの完全なHostチェーンとJS Pathは後続版の対象です。
+- XPathはShadow Root内部では生成できません。
+- iframe内LocatorはフレームDocument基準です。
 
 ## 開発時の確認
 
@@ -75,6 +209,7 @@ npm run check
 npm test
 ```
 
-## バージョン
+## 導入済みスキル
 
-`0.6.2`
+- `.agents/skills/apple-design/SKILL.md`
+- 出典とライセンスは`THIRD_PARTY_NOTICES.md`を参照してください。

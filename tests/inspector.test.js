@@ -8,6 +8,8 @@ const path = require('node:path');
 class MockElement {
   constructor(tagName, attributes = {}, options = {}) {
     this.tagName = String(tagName).toUpperCase();
+    this.localName = String(tagName).toLowerCase();
+    this.namespaceURI = options.namespaceURI || 'http://www.w3.org/1999/xhtml';
     this.attributeMap = { ...attributes };
     this.parentElement = null;
     this.children = [];
@@ -27,6 +29,14 @@ class MockElement {
     return Object.entries(this.attributeMap).map(([name, value]) => ({ name, value }));
   }
 
+  get id() {
+    return this.getAttribute('id') || '';
+  }
+
+  get classList() {
+    return String(this.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean);
+  }
+
   appendChild(child) {
     child.parentElement = this;
     child.ownerDocument = this.ownerDocument;
@@ -36,6 +46,24 @@ class MockElement {
 
   get firstElementChild() {
     return this.children[0] || null;
+  }
+
+  get lastElementChild() {
+    return this.children[this.children.length - 1] || null;
+  }
+
+  get previousElementSibling() {
+    if (!this.parentElement) return null;
+    const index = this.parentElement.children.indexOf(this);
+    return index > 0 ? this.parentElement.children[index - 1] : null;
+  }
+
+  get nextElementSibling() {
+    if (!this.parentElement) return null;
+    const index = this.parentElement.children.indexOf(this);
+    return index >= 0 && index < this.parentElement.children.length - 1
+      ? this.parentElement.children[index + 1]
+      : null;
   }
 
   getAttribute(name) {
@@ -90,6 +118,10 @@ class MockElement {
 
   getBoundingClientRect() {
     return this.rect;
+  }
+
+  getRootNode() {
+    return this.selectorRoot || this.ownerDocument;
   }
 }
 
@@ -156,6 +188,108 @@ test('rejects a missing DOM element', () => {
   assert.throws(() => inspector.inspectElement(null), /対象要素を取得できません/);
 });
 
+test('generates unique CSS, XPath, and JS path locators', () => {
+  const button = new MockElement('button', { id: 'save-button', 'data-testid': 'save' });
+  const xpathResult = { ORDERED_NODE_SNAPSHOT_TYPE: 7 };
+  const selectorRoot = {
+    nodeType: 9,
+    querySelectorAll: selector => selector === '#save-button' ? [button] : [],
+    evaluate: xpath => ({ snapshotLength: xpath === "//*[@id='save-button']" ? 1 : 0 }),
+    defaultView: { XPathResult: xpathResult, getComputedStyle: element => element.computedStyle }
+  };
+  button.selectorRoot = selectorRoot;
+  button.ownerDocument = selectorRoot;
+
+  const css = inspector.generateCssLocator(button);
+  const xpath = inspector.generateXPathLocator(button);
+  const jsPath = inspector.generateJsPath(button, css);
+
+  assert.deepEqual(css, {
+    value: '#save-button',
+    matchCount: 1,
+    unique: true,
+    scope: 'document'
+  });
+  assert.equal(xpath.value, "//*[@id='save-button']");
+  assert.equal(xpath.unique, true);
+  assert.equal(jsPath.value, 'document.querySelector("#save-button")');
+});
+
+test('escapes mixed quotes in XPath attribute values', () => {
+  const button = new MockElement('button', { id: `save'button"primary` });
+  let evaluatedXPath = null;
+  const selectorRoot = {
+    nodeType: 9,
+    querySelectorAll: () => [button],
+    evaluate: xpath => {
+      evaluatedXPath = xpath;
+      return { snapshotLength: 1 };
+    },
+    defaultView: {
+      XPathResult: { ORDERED_NODE_SNAPSHOT_TYPE: 7 },
+      getComputedStyle: element => element.computedStyle
+    }
+  };
+  button.selectorRoot = selectorRoot;
+  button.ownerDocument = selectorRoot;
+
+  const xpath = inspector.generateXPathLocator(button);
+  assert.equal(xpath.unique, true);
+  assert.match(evaluatedXPath, /^\/\/\*\[@id=concat\(/);
+  assert.match(evaluatedXPath, /"'"/);
+});
+
+test('marks a duplicated CSS selector as non-unique', () => {
+  const first = new MockElement('button', { class: 'action' });
+  const second = new MockElement('button', { class: 'action' });
+  const selectorRoot = {
+    nodeType: 9,
+    querySelectorAll: selector => selector === 'button.action' ? [first, second] : []
+  };
+  first.selectorRoot = selectorRoot;
+  first.ownerDocument = selectorRoot;
+
+  const css = inspector.generateCssLocator(first);
+  assert.equal(css.value, 'button.action');
+  assert.equal(css.matchCount, 2);
+  assert.equal(css.unique, false);
+});
+
+test('does not emit a misleading JS path inside a Shadow Root', () => {
+  const button = new MockElement('button', { id: 'shadow-save' });
+  const shadowRoot = {
+    nodeType: 11,
+    querySelectorAll: selector => selector === '#shadow-save' ? [button] : []
+  };
+  button.selectorRoot = shadowRoot;
+
+  const css = inspector.generateCssLocator(button);
+  const jsPath = inspector.generateJsPath(button, css);
+
+  assert.equal(css.scope, 'shadow-root');
+  assert.equal(jsPath.value, null);
+  assert.equal(jsPath.unsupported, true);
+});
+
+test('reports sibling position and selectable children', () => {
+  const parent = new MockElement('div');
+  const first = parent.appendChild(new MockElement('span', { id: 'first' }, { textContent: 'First' }));
+  const second = parent.appendChild(new MockElement('span', { id: 'second' }, { textContent: 'Second' }));
+  second.appendChild(new MockElement('strong', {}, { textContent: 'Child A' }));
+  second.appendChild(new MockElement('em', {}, { textContent: 'Child B' }));
+  parent.appendChild(new MockElement('span', { id: 'third' }, { textContent: 'Third' }));
+
+  const navigation = inspector.getNavigationState(second);
+  assert.equal(navigation.hasParent, true);
+  assert.equal(navigation.hasPreviousSibling, true);
+  assert.equal(navigation.hasNextSibling, true);
+  assert.equal(navigation.siblingIndex, 1);
+  assert.equal(navigation.siblingCount, 3);
+  assert.equal(navigation.childCount, 2);
+  assert.equal(navigation.children[0].tagName, 'strong');
+  assert.equal(first.nextElementSibling, second);
+});
+
 test('manifest and runtime implement the toolbar-driven in-page inspector', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -169,14 +303,19 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.6.2');
-  assert.equal(pkg.version, '0.6.2');
+  assert.equal(manifest.version, '0.8.0');
+  assert.equal(pkg.version, '0.8.0');
   assert.deepEqual(manifest.permissions, ['clipboardWrite']);
-  assert.equal(manifest.content_scripts[0].all_frames, undefined);
+  assert.equal(manifest.content_scripts[0].all_frames, true);
+  assert.equal(manifest.content_scripts[0].match_about_blank, true);
+  assert.equal(manifest.content_scripts[0].match_origin_as_fallback, true);
   assert.doesNotMatch(background, /contextMenus/);
   assert.match(background, /chrome\.action\.onClicked/);
-  assert.match(background, /ELEMENT_INSPECTOR_TOGGLE/);
-  assert.match(background, /\{ frameId: 0 \}/);
+  assert.match(background, /ELEMENT_INSPECTOR_FRAME_READY/);
+  assert.match(background, /ELEMENT_INSPECTOR_QUERY_STATE/);
+  assert.match(background, /ELEMENT_INSPECTOR_TOP_COMMAND/);
+  assert.match(background, /selectedFrameId/);
+  assert.match(background, /broadcastToFrames/);
   assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/);
   assert.match(content, /@keyframes ei-rainbow-flow-x/);
   assert.match(content, /@keyframes ei-rainbow-flow-y/);
@@ -184,19 +323,33 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /edge\.className = `highlight-edge \$\{side\}`/);
   assert.doesNotMatch(highlightCss, /mask-composite|webkit-mask|conic-gradient|drop-shadow/);
   assert.doesNotMatch(highlightCss, /opacity\s*:/);
-  assert.match(content, /selectedElement\?\.parentElement/);
-  assert.match(content, /selectedElement\?\.firstElementChild/);
+  assert.match(content, /FRAME_CHANNEL/);
+  assert.match(content, /window\.parent\.postMessage/);
+  assert.match(content, /querySelectorAll\('iframe, frame'\)/);
+  assert.match(content, /refreshChildFrameContexts/);
+  assert.match(content, /frameRelative/);
+  assert.match(content, /data-nav="previous"/);
+  assert.match(content, /data-nav="next"/);
+  assert.match(content, /child-select/);
+  assert.match(content, /data-tab="locators"/);
+  assert.match(content, /CSS Selector/);
+  assert.match(content, /XPath/);
+  assert.match(content, /JS Path/);
+  assert.match(content, /prefers-reduced-motion/);
+  assert.match(content, /prefers-reduced-transparency/);
   assert.match(content, /countdownDeadline/);
-  assert.match(content, /state\.mode !== 'picking'/);
   assert.match(content, /JSONをコピー/);
   assert.match(content, /JSONを保存/);
   assert.match(content, /beginPanelDrag/);
   assert.match(content, /setPointerCapture/);
   assert.match(content, /releasePointerCapture/);
-  assert.match(content, /event\.key === 'Escape'[\s\S]*destroyInspector\(\)/);
-  assert.match(content, /if \(state\.open\) destroyInspector\(\)/);
+  assert.match(content, /event\.key !== 'Escape'[\s\S]*sendTopCommand\('DEACTIVATE'\)/);
   assert.match(content, /navigator\.clipboard\?\.writeText/);
   assert.match(content, /URL\.createObjectURL/);
+  assert.match(inspectorSource, /generateCssLocator/);
+  assert.match(inspectorSource, /generateXPathLocator/);
+  assert.match(inspectorSource, /generateJsPath/);
+  assert.match(inspectorSource, /getNavigationState/);
   assert.doesNotMatch(runtimeSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon/);
   assert.doesNotMatch(runtimeSource, /localStorage|sessionStorage|chrome\.storage/);
 });

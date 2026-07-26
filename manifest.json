@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Element Inspector",
-  "version": "0.6.2",
-  "description": "Open an in-page inspector, select DOM elements, navigate the hierarchy, and export formatted JSON.",
+  "version": "0.8.0",
+  "description": "Inspect DOM elements across frames, generate locators, navigate hierarchy, and export formatted JSON.",
   "icons": {
     "16": "assets/icons/main-icon.png",
     "32": "assets/icons/main-icon.png",
@@ -33,6 +33,9 @@
         "inspector.js",
         "content.js"
       ],
+      "all_frames": true,
+      "match_about_blank": true,
+      "match_origin_as_fallback": true,
       "run_at": "document_start"
     }
   ]
