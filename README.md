@@ -4,7 +4,7 @@ Chromeのツールバーから起動し、ページ上のDOM要素を視覚的�
 
 ## 現在のバージョン
 
-`0.8.0`
+`0.8.1`
 
 ## 起動
 
@@ -26,18 +26,22 @@ Chromeのツールバーから起動し、ページ上のDOM要素を視覚的�
 ↓
 クリックして固定
 ↓
-Overview / Locators / JSONを確認
+固定Hierarchy・選択履歴・Overview / Locators / JSONを確認
 ```
 
 ### 専用ウィンドウ
 
 - ヘッダをドラッグして移動できます。
-- `Overview`で対象情報と階層ナビゲーションを確認します。
+- Hierarchyはタブ外の固定エリアに常時表示します。
+- 戻る・進むボタンで過去の選択対象を移動できます。
+- `Overview`で対象情報を確認します。
 - `Locators`でCSS Selector、XPath、JS Pathを確認・コピーします。
 - `JSON`で全結果をコピーまたはファイル保存します。
 - `prefers-reduced-motion`、`prefers-reduced-transparency`、`prefers-contrast`へ対応します。
 
 UIはプロジェクト内の`apple-design`スキルを設計基準として、即時フィードバック、1:1ドラッグ、視覚階層、抑制されたマテリアル表現を重視しています。
+
+`TOP FRAME`またはiframe情報、選択状態、閉じる操作はヘッダ右側へ集約しています。閉じるアイコンは文字ではなくSVGで描画し、ボタン中央へ配置します。
 
 ## 要素選択
 
@@ -71,6 +75,21 @@ UIはプロジェクト内の`apple-design`スキルを設計基準として、�
 
 ウィンドウには兄弟内の現在位置と子要素数を表示します。移動するたびにDOM解析とLocator生成を再実行します。
 
+Hierarchyは`Overview`、`Locators`、`JSON`のどのビューでも利用できます。
+
+## 選択履歴
+
+要素のクリック固定、階層移動、子要素選択のたびに一時履歴へ追加します。
+
+- 戻る：直前の選択対象へ戻る
+- 進む：戻る前の選択対象へ進む
+- 戻ったあとに新しい要素を選択すると、進む側の履歴を破棄
+- 最大100件
+- iframeをまたいだ履歴移動に対応
+- Inspector終了時に全履歴を破棄
+
+履歴はLocatorから再探索せず、各フレーム内で保持した実際のElement参照を使用します。対象要素がページから削除されている場合は復元せず、エラーを表示します。
+
 ## Locator生成
 
 ### CSS Selector
@@ -103,6 +122,8 @@ document.querySelector('[data-testid="save-button"]')
 ```
 
 iframe内部で生成されたJS Pathは、そのiframeのDocument基準です。トップDocumentからクロスオリジンiframe内部へ直接到達する式ではありません。
+
+Locatorの状態バッジには、一意性に加えて`DOCUMENT`または`FRAME`基準を表示します。
 
 ## iframe対応
 
@@ -188,7 +209,7 @@ iframe間の選択結果はBackground Service Workerを介してトップフレ�
 - 外部通信を行いません。
 - DOM解析結果をサーバーへ送信しません。
 - localStorage、sessionStorage、Chrome Storageを使用しません。
-- 履歴を永続保存しません。
+- 選択履歴を永続保存しません。
 
 Content Scriptは`<all_urls>`へ宣言されます。これはツールバー起動後に、トップページとiframe内の対象要素を選択・解析するためです。
 

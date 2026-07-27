@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Element Inspector",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "Inspect DOM elements across frames, generate locators, navigate hierarchy, and export formatted JSON.",
   "icons": {
     "16": "assets/icons/main-icon.png",

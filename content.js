@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.8.0';
+  const EXTENSION_VERSION = '0.8.1';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -28,6 +28,7 @@
     host: null,
     shadow: null,
     marker: null,
+    selectionRegistry: new Map(),
     frameToken: createToken(),
     childFrameRequests: new Map(),
     frameContext: {
@@ -46,6 +47,8 @@
     pickButton: null,
     delayInput: null,
     delayButton: null,
+    backButton: null,
+    forwardButton: null,
     tabButtons: [],
     tabPanels: [],
     parentButton: null,
@@ -73,7 +76,10 @@
     countdownDeadline: 0,
     countdownRemaining: 0,
     drag: null,
-    activeTab: 'overview'
+    activeTab: 'overview',
+    history: [],
+    historyIndex: -1,
+    pendingHistoryIndex: null
   };
 
   function createToken() {
@@ -238,7 +244,15 @@
     clearFrameSelection();
   }
 
-  function inspectAndSelect(element, reason = 'クリック') {
+  function rememberSelection(selectionId, element) {
+    frameState.selectionRegistry.set(selectionId, element);
+    while (frameState.selectionRegistry.size > 100) {
+      const oldestKey = frameState.selectionRegistry.keys().next().value;
+      frameState.selectionRegistry.delete(oldestKey);
+    }
+  }
+
+  function inspectAndSelect(element, reason = 'クリック', options = {}) {
     if (!isElement(element) || !element.isConnected) {
       emitFrameEvent({
         kind: 'status',
@@ -262,6 +276,9 @@
     frameState.selectedElement = element;
     setHighlightTarget(element);
 
+    const selectionId = options.selectionId || createToken();
+    rememberSelection(selectionId, element);
+
     const result = globalThis.ElementInspector.inspectElement(element);
     result.frame = buildFrameInfo();
     result.locators.context = {
@@ -272,7 +289,27 @@
     emitFrameEvent({
       kind: 'selected',
       reason,
+      selectionId,
+      historyMode: options.historyMode || 'push',
       result
+    });
+  }
+
+  function restoreSelection(selectionId) {
+    const element = frameState.selectionRegistry.get(selectionId);
+    if (!isElement(element) || !element.isConnected) {
+      frameState.selectionRegistry.delete(selectionId);
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        historyRestoreFailed: true,
+        message: '履歴の対象要素はページから削除されています。'
+      });
+      return;
+    }
+    inspectAndSelect(element, '履歴', {
+      selectionId,
+      historyMode: 'restore'
     });
   }
 
@@ -478,16 +515,17 @@
     return `FRAME ${frame.frameId} · DEPTH ${frame.depth}`;
   }
 
-  function locatorBadge(locator) {
+  function locatorBadge(locator, frameRelative) {
     if (!locator?.value) return 'UNAVAILABLE';
-    if (locator.unique) return 'UNIQUE';
-    if (Number.isInteger(locator.matchCount)) return `${locator.matchCount} MATCHES`;
-    return locator.scope?.toUpperCase() || 'READY';
+    const scope = frameRelative ? 'FRAME' : 'DOCUMENT';
+    if (locator.unique) return `UNIQUE · ${scope}`;
+    if (Number.isInteger(locator.matchCount)) return `${locator.matchCount} MATCHES · ${scope}`;
+    return `${locator.scope?.toUpperCase() || 'READY'} · ${scope}`;
   }
 
-  function setLocatorView(valueNode, badgeNode, locator) {
+  function setLocatorView(valueNode, badgeNode, locator, frameRelative) {
     valueNode.textContent = locator?.value || '生成できません';
-    badgeNode.textContent = locatorBadge(locator);
+    badgeNode.textContent = locatorBadge(locator, frameRelative);
     badgeNode.dataset.unique = locator?.unique ? 'true' : 'false';
   }
 
@@ -495,6 +533,9 @@
     if (!ui.panel) return;
     const result = ui.result;
     const hasResult = Boolean(result);
+
+    ui.backButton.disabled = ui.historyIndex <= 0 || ui.pendingHistoryIndex !== null;
+    ui.forwardButton.disabled = ui.historyIndex < 0 || ui.historyIndex >= ui.history.length - 1 || ui.pendingHistoryIndex !== null;
 
     ui.parentButton.disabled = !result?.navigation?.hasParent;
     ui.previousButton.disabled = !result?.navigation?.hasPreviousSibling;
@@ -521,9 +562,9 @@
       ui.rectValue.textContent = '—';
       ui.textValue.textContent = 'ページ上の要素へポインターを移動してください。';
       ui.frameBadge.textContent = 'TOP FRAME';
-      setLocatorView(ui.cssValue, ui.cssBadge, null);
-      setLocatorView(ui.xpathValue, ui.xpathBadge, null);
-      setLocatorView(ui.jsPathValue, ui.jsPathBadge, null);
+      setLocatorView(ui.cssValue, ui.cssBadge, null, false);
+      setLocatorView(ui.xpathValue, ui.xpathBadge, null, false);
+      setLocatorView(ui.jsPathValue, ui.jsPathBadge, null, false);
       ui.jsonPreview.textContent = '固定した要素のJSONがここに表示されます。';
       return;
     }
@@ -537,9 +578,10 @@
       ? `${rect.width} × ${rect.height} · ${rect.left}, ${rect.top}`
       : '—';
     ui.textValue.textContent = result.selectedText || 'テキストなし';
-    setLocatorView(ui.cssValue, ui.cssBadge, result.locators?.css);
-    setLocatorView(ui.xpathValue, ui.xpathBadge, result.locators?.xpath);
-    setLocatorView(ui.jsPathValue, ui.jsPathBadge, result.locators?.jsPath);
+    const frameRelative = Boolean(result.locators?.context?.frameRelative);
+    setLocatorView(ui.cssValue, ui.cssBadge, result.locators?.css, frameRelative);
+    setLocatorView(ui.xpathValue, ui.xpathBadge, result.locators?.xpath, frameRelative);
+    setLocatorView(ui.jsPathValue, ui.jsPathBadge, result.locators?.jsPath, frameRelative);
     ui.jsonPreview.textContent = JSON.stringify(result, null, 2);
   }
 
@@ -552,6 +594,33 @@
     for (const panel of ui.tabPanels) {
       panel.hidden = panel.dataset.panel !== tabName;
     }
+  }
+
+  function pushSelectionHistory(event) {
+    if (!event.selectionId || !Number.isInteger(event.frameId) || !event.result) return;
+    if (ui.historyIndex < ui.history.length - 1) {
+      ui.history.splice(ui.historyIndex + 1);
+    }
+    ui.history.push({
+      selectionId: event.selectionId,
+      frameId: event.frameId,
+      result: event.result
+    });
+    if (ui.history.length > 100) ui.history.shift();
+    ui.historyIndex = ui.history.length - 1;
+  }
+
+  function navigateHistory(delta) {
+    if (ui.pendingHistoryIndex !== null) return;
+    const targetIndex = ui.historyIndex + delta;
+    const entry = ui.history[targetIndex];
+    if (!entry) return;
+    ui.pendingHistoryIndex = targetIndex;
+    renderUI();
+    sendTopCommand('RESTORE_SELECTION', {
+      targetFrameId: entry.frameId,
+      selectionId: entry.selectionId
+    });
   }
 
   function beginPicking() {
@@ -651,6 +720,12 @@
 
     if (event.kind === 'selected' && event.result) {
       clearUICountdown();
+      if (event.historyMode === 'restore' && ui.pendingHistoryIndex !== null) {
+        ui.historyIndex = ui.pendingHistoryIndex;
+      } else {
+        pushSelectionHistory(event);
+      }
+      ui.pendingHistoryIndex = null;
       ui.result = event.result;
       ui.selectedFrameId = event.frameId;
       setUIMode('fixed');
@@ -660,7 +735,9 @@
     }
 
     if (event.kind === 'status') {
+      if (event.historyRestoreFailed) ui.pendingHistoryIndex = null;
       setUIStatus(event.message || '状態を更新しました。', event.status || 'normal');
+      renderUI();
     }
   }
 
@@ -721,7 +798,7 @@
       @keyframes ei-rainbow-flow-x { to { background-position: -300% 0; } }
       @keyframes ei-rainbow-flow-y { to { background-position: 0 -300%; } }
       @keyframes ei-panel-arrive {
-        from { opacity: 0; transform: scale(.985) translateY(-4px); }
+        from { opacity: 0; transform: scale(.99) translateY(-3px); }
         to { opacity: 1; transform: scale(1) translateY(0); }
       }
       * { box-sizing: border-box; }
@@ -753,34 +830,34 @@
       .highlight-edge.right { right: 0; }
       .panel {
         position: fixed;
-        top: 16px;
-        right: 16px;
+        top: 14px;
+        right: 14px;
         z-index: 2;
-        width: 456px;
-        max-width: calc(100vw - 32px);
-        max-height: calc(100vh - 32px);
+        width: 468px;
+        max-width: calc(100vw - 28px);
+        max-height: calc(100vh - 28px);
         overflow: hidden;
         pointer-events: auto;
-        color: #f1f3f5;
-        border: 1px solid rgba(255,255,255,.12);
-        border-radius: 18px;
+        color: #eef1f4;
+        border: 1px solid rgba(255,255,255,.105);
+        border-radius: 16px;
         background:
-          radial-gradient(circle at 18% 0%, rgba(120,150,205,.12), transparent 34%),
-          rgba(24,27,32,.9);
-        backdrop-filter: blur(26px) saturate(145%);
-        -webkit-backdrop-filter: blur(26px) saturate(145%);
-        box-shadow: 0 28px 80px rgba(0,0,0,.5), 0 1px 0 rgba(255,255,255,.08) inset;
+          radial-gradient(circle at 10% -10%, rgba(113,142,194,.12), transparent 36%),
+          rgba(25,28,33,.92);
+        backdrop-filter: blur(24px) saturate(135%);
+        -webkit-backdrop-filter: blur(24px) saturate(135%);
+        box-shadow: 0 26px 72px rgba(0,0,0,.48), 0 1px 0 rgba(255,255,255,.065) inset;
         font: 12px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
         font-optical-sizing: auto;
-        animation: ei-panel-arrive 180ms cubic-bezier(.2,.8,.2,1) both;
+        animation: ei-panel-arrive 160ms cubic-bezier(.2,.8,.2,1) both;
       }
       .titlebar {
         position: relative;
         display: flex;
         align-items: center;
-        gap: 12px;
-        min-height: 60px;
-        padding: 11px 12px 11px 15px;
+        gap: 10px;
+        min-height: 52px;
+        padding: 9px 10px 9px 13px;
         cursor: grab;
         user-select: none;
         touch-action: none;
@@ -788,46 +865,46 @@
       .titlebar::after {
         content: '';
         position: absolute;
-        left: 14px; right: 14px; bottom: 0;
+        left: 12px; right: 12px; bottom: 0;
         height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,.12) 14%, rgba(255,255,255,.12) 86%, transparent);
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,.09) 12%, rgba(255,255,255,.09) 88%, transparent);
       }
       .titlebar:active { cursor: grabbing; }
       .brand-mark {
         flex: 0 0 auto;
         display: grid;
         place-items: center;
-        width: 32px;
-        height: 32px;
+        width: 28px;
+        height: 28px;
         border: 1px solid rgba(255,255,255,.15);
-        border-radius: 10px;
-        background: linear-gradient(145deg, rgba(126,157,213,.28), rgba(61,70,84,.34));
-        box-shadow: 0 1px 0 rgba(255,255,255,.12) inset, 0 8px 20px rgba(0,0,0,.22);
+        border-radius: 8px;
+        background: linear-gradient(145deg, rgba(126,157,213,.24), rgba(61,70,84,.3));
+        box-shadow: 0 1px 0 rgba(255,255,255,.1) inset;
       }
       .brand-mark::before {
         content: '';
-        width: 15px;
-        height: 15px;
+        width: 13px;
+        height: 13px;
         border: 1.5px solid #dbe4f5;
-        border-radius: 4px;
+        border-radius: 3px;
         box-shadow: 5px 5px 0 -3px #8ba7d9;
       }
       .brand-copy { min-width: 0; flex: 1; }
-      .brand-title { display: block; font-size: 13px; font-weight: 680; letter-spacing: -.012em; }
-      .brand-subtitle { display: block; margin-top: 2px; color: #929ba7; font-size: 10px; letter-spacing: .018em; }
-      .title-actions { display: flex; align-items: center; gap: 8px; }
+      .brand-title { display: block; font-size: 12.5px; font-weight: 690; letter-spacing: -.012em; }
+      .brand-subtitle { display: block; margin-top: 1px; color: #8b949f; font-size: 9.5px; letter-spacing: .012em; }
+      .title-actions { display: flex; align-items: center; gap: 6px; }
       .mode-pill, .frame-pill, .locator-badge {
         display: inline-flex;
         align-items: center;
-        min-height: 22px;
+        min-height: 20px;
         border: 1px solid rgba(255,255,255,.11);
         border-radius: 999px;
-        padding: 3px 8px;
-        background: rgba(255,255,255,.045);
+        padding: 2px 7px;
+        background: rgba(255,255,255,.038);
         color: #aab2bd;
-        font-size: 9px;
+        font-size: 8.5px;
         font-weight: 650;
-        letter-spacing: .075em;
+        letter-spacing: .065em;
         white-space: nowrap;
       }
       .mode-pill[data-mode="picking"] { color: #b9cdf4; border-color: rgba(122,162,247,.38); }
@@ -835,114 +912,170 @@
       .mode-pill[data-mode="countdown"] { color: #ffd58d; border-color: rgba(226,169,69,.38); }
       button, input, select { font: inherit; }
       button {
-        min-height: 32px;
+        min-height: 31px;
         border: 1px solid rgba(255,255,255,.12);
-        border-radius: 9px;
-        padding: 6px 10px;
-        background: rgba(255,255,255,.06);
+        border-radius: 8px;
+        padding: 5px 9px;
+        background: rgba(255,255,255,.052);
         color: #e9ecef;
-        box-shadow: 0 1px 0 rgba(255,255,255,.055) inset;
+        box-shadow: 0 1px 0 rgba(255,255,255,.04) inset;
         cursor: pointer;
         transition: background 120ms ease, border-color 120ms ease, transform 90ms ease;
       }
-      button:hover:not(:disabled) { background: rgba(255,255,255,.1); border-color: rgba(255,255,255,.19); }
+      button:hover:not(:disabled) { background: rgba(255,255,255,.085); border-color: rgba(255,255,255,.18); }
       button:active:not(:disabled) { transform: scale(.97); }
       button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #8fb4f7; outline-offset: 2px; }
       button:disabled { opacity: .34; cursor: default; }
-      button.primary { background: linear-gradient(180deg, rgba(91,126,187,.72), rgba(65,91,139,.72)); border-color: rgba(137,176,241,.52); }
+      button.primary { background: rgba(76,108,166,.74); border-color: rgba(137,176,241,.44); }
       button.primary[data-active="true"] { box-shadow: 0 0 0 2px rgba(122,162,247,.18), 0 1px 0 rgba(255,255,255,.09) inset; }
-      button.icon { width: 32px; min-width: 32px; padding: 0; font-size: 17px; line-height: 1; }
-      .workspace { max-height: calc(100vh - 92px); overflow: auto; padding: 12px 14px 14px; }
-      .target-card {
+      button.icon-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 29px;
+        min-width: 29px;
+        height: 29px;
+        min-height: 29px;
+        padding: 0;
+      }
+      button.icon-button svg { display: block; width: 14px; height: 14px; stroke: currentColor; }
+      button.close-button { border-radius: 8px; color: #cbd1d8; }
+      .workspace {
+        display: flex;
+        flex-direction: column;
+        max-height: calc(100vh - 80px);
+        overflow: hidden;
+        padding: 10px 12px 0;
+      }
+      .fixed-stack {
+        flex: 0 0 auto;
         border: 1px solid rgba(255,255,255,.095);
         border-radius: 14px;
-        padding: 12px;
-        background: rgba(255,255,255,.035);
-        box-shadow: 0 1px 0 rgba(255,255,255,.035) inset;
+        overflow: hidden;
+        background: rgba(255,255,255,.025);
+        box-shadow: 0 1px 0 rgba(255,255,255,.025) inset;
       }
-      .target-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+      .command-surface { padding: 10px 11px 11px; }
+      .target-row { display: flex; align-items: center; gap: 10px; }
       .eyebrow { color: #7f8996; font-size: 9px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
-      .target-name { display: block; margin-top: 4px; overflow: hidden; color: #f7f8fa; font: 600 14px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow: ellipsis; white-space: nowrap; }
-      .status { min-height: 34px; margin-top: 9px; color: #aab1bb; }
+      .target-name { display: block; margin-top: 2px; overflow: hidden; color: #f4f6f8; font: 600 13px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow: ellipsis; white-space: nowrap; }
+      .status { min-height: 20px; margin-top: 6px; color: #a7afb9; font-size: 10.5px; }
       .status[data-kind="success"] { color: #a5dcbc; }
       .status[data-kind="error"] { color: #ffb0a8; }
-      .command-row { display: grid; grid-template-columns: minmax(0,1fr) 150px; gap: 8px; margin-top: 10px; }
-      .delay-control { display: grid; grid-template-columns: 48px 1fr; gap: 6px; }
+      .command-row { display: grid; grid-template-columns: minmax(0,1fr) 142px auto; gap: 7px; margin-top: 8px; }
+      .delay-control { display: grid; grid-template-columns: 43px 1fr; gap: 5px; }
+      .history-controls { display: grid; grid-template-columns: repeat(2, 29px); gap: 5px; }
       input, select {
         width: 100%;
-        min-height: 32px;
+        min-height: 31px;
         border: 1px solid rgba(255,255,255,.12);
-        border-radius: 9px;
-        padding: 6px 8px;
+        border-radius: 8px;
+        padding: 5px 8px;
         background: rgba(8,10,13,.46);
         color: #edf0f3;
       }
-      .tabs {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 3px;
-        margin-top: 12px;
-        border: 1px solid rgba(255,255,255,.09);
-        border-radius: 11px;
-        padding: 3px;
-        background: rgba(7,9,12,.3);
+      .hierarchy-surface {
+        padding: 9px 10px 10px;
+        border-top: 1px solid rgba(255,255,255,.075);
+        background: rgba(7,9,12,.14);
       }
-      .tabs button { min-height: 30px; border: 0; background: transparent; color: #8f98a4; box-shadow: none; }
-      .tabs button[data-active="true"] { background: rgba(255,255,255,.085); color: #f1f3f5; box-shadow: 0 1px 4px rgba(0,0,0,.18); }
-      .tab-panel { margin-top: 10px; }
-      .tab-panel[hidden] { display: none; }
-      .card {
-        margin-top: 8px;
-        border: 1px solid rgba(255,255,255,.085);
-        border-radius: 13px;
-        padding: 11px;
-        background: rgba(9,11,14,.26);
-      }
-      .card:first-child { margin-top: 0; }
-      .card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-      .card-title { margin: 0; color: #9aa3ae; font-size: 9px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; }
-      .metrics { display: flex; gap: 6px; color: #7f8995; font-size: 9px; }
-      .metrics b { color: #c8ced6; font-weight: 650; }
+      .surface-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+      .surface-title { color: #939ca7; font-size: 9px; font-weight: 700; letter-spacing: .085em; text-transform: uppercase; }
+      .metrics { display: flex; gap: 8px; color: #707a86; font-size: 8.5px; }
+      .metrics b { color: #bcc3cb; font-weight: 650; }
       .nav-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
-      .nav-grid button { min-width: 0; padding-inline: 4px; font-size: 10px; }
-      .child-select { margin-top: 7px; }
+      .nav-grid button { min-width: 0; min-height: 29px; padding-inline: 4px; font-size: 9.5px; }
+      .child-select { margin-top: 6px; }
+      .tabs {
+        display: flex;
+        flex: 0 0 auto;
+        gap: 20px;
+        margin-top: 10px;
+        padding: 0 4px;
+        border-bottom: 1px solid rgba(255,255,255,.075);
+      }
+      .tabs button {
+        position: relative;
+        min-height: 34px;
+        border: 0;
+        border-radius: 0;
+        padding: 0 1px;
+        background: transparent;
+        color: #818b97;
+        box-shadow: none;
+        font-size: 10.5px;
+      }
+      .tabs button::after {
+        content: '';
+        position: absolute;
+        left: 0; right: 0; bottom: -1px;
+        height: 2px;
+        border-radius: 2px 2px 0 0;
+        background: #8fb4f7;
+        transform: scaleX(0);
+        transition: transform 140ms ease;
+      }
+      .tabs button[data-active="true"] { color: #edf1f5; }
+      .tabs button[data-active="true"]::after { transform: scaleX(1); }
+      .view-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 1px 8px; }
+      .tab-panel { margin: 0; }
+      .tab-panel[hidden] { display: none; }
+      .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
+      .section-title { margin: 0; color: #9099a5; font-size: 9px; font-weight: 700; letter-spacing: .085em; text-transform: uppercase; }
       .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-      .info-cell { min-width: 0; border: 1px solid rgba(255,255,255,.065); border-radius: 10px; padding: 8px; background: rgba(255,255,255,.025); }
+      .info-cell { min-width: 0; border-bottom: 1px solid rgba(255,255,255,.065); padding: 7px 2px 8px; }
       .info-cell.wide { grid-column: 1 / -1; }
-      .info-label { display: block; color: #747e8a; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
-      .info-value { display: block; margin-top: 3px; overflow: hidden; color: #dde1e6; text-overflow: ellipsis; white-space: nowrap; font: 11px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .info-label { display: block; color: #707a86; font-size: 8.5px; letter-spacing: .055em; text-transform: uppercase; }
+      .info-value { display: block; margin-top: 3px; overflow: hidden; color: #dbe0e6; text-overflow: ellipsis; white-space: nowrap; font: 10.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
       .info-value.wrap { max-height: 68px; overflow: auto; white-space: normal; overflow-wrap: anywhere; }
-      .locator-card { margin-top: 8px; }
-      .locator-card:first-child { margin-top: 0; }
+      .locator-card { padding: 9px 0 10px; border-bottom: 1px solid rgba(255,255,255,.065); }
+      .locator-card:first-child { padding-top: 0; }
+      .locator-card:last-child { border-bottom: 0; }
       .locator-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
       .locator-name { color: #c9cfd7; font-size: 10px; font-weight: 650; }
       .locator-badge[data-unique="true"] { color: #a7debe; border-color: rgba(75,180,123,.32); }
-      .locator-body { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 7px; align-items: start; }
+      .locator-body { display: grid; grid-template-columns: minmax(0,1fr) 54px; gap: 7px; align-items: start; }
       .code-box {
         min-height: 44px;
         max-height: 108px;
         margin: 0;
         overflow: auto;
         border: 1px solid rgba(255,255,255,.07);
-        border-radius: 9px;
+        border-radius: 8px;
         padding: 8px;
-        background: rgba(5,7,9,.46);
+        background: rgba(5,7,9,.4);
         color: #d7dce3;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         font: 10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
       }
-      .json-toolbar { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 7px; }
+      .json-toolbar { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 8px; }
       .json-preview { max-height: 380px; }
-      .footnote { margin-top: 10px; color: #6f7884; font-size: 9px; text-align: center; }
+      .footer {
+        display: flex;
+        flex: 0 0 auto;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin: 0 -12px;
+        padding: 8px 12px 9px;
+        border-top: 1px solid rgba(255,255,255,.065);
+        color: #6f7884;
+        font-size: 8.5px;
+      }
+      .local-state { display: inline-flex; align-items: center; gap: 6px; }
+      .local-state::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #6f9f82; box-shadow: 0 0 0 2px rgba(111,159,130,.12); }
+      .keycap { border: 1px solid rgba(255,255,255,.11); border-radius: 5px; padding: 1px 5px; background: rgba(255,255,255,.035); color: #949da8; font-size: 8px; }
       @media (max-width: 540px) {
         .panel { width: calc(100vw - 20px); top: 10px; right: 10px; max-width: none; }
-        .command-row { grid-template-columns: 1fr; }
+        .command-row { grid-template-columns: 1fr 142px auto; }
         .nav-grid { grid-template-columns: repeat(3, 1fr); }
+        .frame-pill { display: none; }
       }
       @media (prefers-reduced-motion: reduce) {
         .panel { animation: none; }
         button { transition: none; }
+        .tabs button::after { transition: none; }
         .highlight-edge { animation-duration: 4s !important; }
       }
       @media (prefers-reduced-transparency: reduce) {
@@ -950,7 +1083,7 @@
       }
       @media (prefers-contrast: more) {
         .panel { background: #111317; border-color: rgba(255,255,255,.38); }
-        .card, .target-card { border-color: rgba(255,255,255,.24); }
+        .fixed-stack { border-color: rgba(255,255,255,.24); }
       }
     `;
     return style;
@@ -981,39 +1114,43 @@
           <span class="brand-subtitle">v${EXTENSION_VERSION} · drag the header to move</span>
         </div>
         <div class="title-actions">
+          <span class="frame-pill">TOP FRAME</span>
           <span class="mode-pill" data-mode="picking">SELECTING</span>
-          <button class="icon" type="button" data-action="close" aria-label="閉じる">×</button>
+          <button class="icon-button close-button" type="button" data-action="close" aria-label="閉じる">
+            <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
         </div>
       </header>
       <div class="workspace">
-        <section class="target-card">
-          <div class="target-row">
-            <div style="min-width:0;flex:1">
-              <span class="eyebrow">Current target</span>
-              <code class="target-name">Select an element</code>
+        <div class="fixed-stack">
+          <section class="command-surface">
+            <div class="target-row">
+              <div style="min-width:0;flex:1">
+                <span class="eyebrow">Current target</span>
+                <code class="target-name">Select an element</code>
+              </div>
             </div>
-            <span class="frame-pill">TOP FRAME</span>
-          </div>
-          <div class="status" role="status">対象をホバーし、クリックして固定してください。</div>
-          <div class="command-row">
-            <button class="primary" type="button" data-action="pick" data-active="true">要素を選択</button>
-            <div class="delay-control">
-              <input type="number" min="1" max="60" value="${DEFAULT_DELAY_SECONDS}" aria-label="固定までの秒数">
-              <button type="button" data-action="delay">秒後に固定</button>
+            <div class="status" role="status">対象をホバーし、クリックして固定してください。</div>
+            <div class="command-row">
+              <button class="primary" type="button" data-action="pick" data-active="true">要素を選択</button>
+              <div class="delay-control">
+                <input type="number" min="1" max="60" value="${DEFAULT_DELAY_SECONDS}" aria-label="固定までの秒数">
+                <button type="button" data-action="delay">秒後に固定</button>
+              </div>
+              <div class="history-controls" aria-label="選択履歴">
+                <button class="icon-button" type="button" data-action="history-back" aria-label="前の選択へ戻る" title="前の選択へ戻る">
+                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.75 3.5L5.25 8l4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+                <button class="icon-button" type="button" data-action="history-forward" aria-label="次の選択へ進む" title="次の選択へ進む">
+                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.25 3.5L10.75 8l-4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <nav class="tabs" role="tablist" aria-label="Inspector views">
-          <button type="button" role="tab" data-tab="overview" data-active="true">Overview</button>
-          <button type="button" role="tab" data-tab="locators" data-active="false">Locators</button>
-          <button type="button" role="tab" data-tab="json" data-active="false">JSON</button>
-        </nav>
-
-        <div class="tab-panel" data-panel="overview">
-          <section class="card">
-            <div class="card-head">
-              <h2 class="card-title">Hierarchy</h2>
+          <section class="hierarchy-surface">
+            <div class="surface-head">
+              <span class="surface-title">Hierarchy</span>
               <div class="metrics"><span>Sibling <b data-value="sibling">—</b></span><span>Children <b data-value="children">—</b></span></div>
             </div>
             <div class="nav-grid">
@@ -1025,43 +1162,57 @@
             </div>
             <select class="child-select" aria-label="子要素を選択"></select>
           </section>
-          <section class="card">
-            <div class="card-head"><h2 class="card-title">Snapshot</h2></div>
-            <div class="info-grid">
-              <div class="info-cell"><span class="info-label">Tag</span><code class="info-value" data-value="tag">未固定</code></div>
-              <div class="info-cell"><span class="info-label">Identity</span><code class="info-value" data-value="identity">—</code></div>
-              <div class="info-cell wide"><span class="info-label">Rect</span><code class="info-value" data-value="rect">—</code></div>
-              <div class="info-cell wide"><span class="info-label">Text</span><code class="info-value wrap" data-value="text">ページ上の要素へポインターを移動してください。</code></div>
-            </div>
-          </section>
         </div>
 
-        <div class="tab-panel" data-panel="locators" hidden>
-          <section class="card locator-card" data-locator="css">
-            <div class="locator-head"><span class="locator-name">CSS Selector</span><span class="locator-badge">UNAVAILABLE</span></div>
-            <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="css">コピー</button></div>
-          </section>
-          <section class="card locator-card" data-locator="xpath">
-            <div class="locator-head"><span class="locator-name">XPath</span><span class="locator-badge">UNAVAILABLE</span></div>
-            <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="xpath">コピー</button></div>
-          </section>
-          <section class="card locator-card" data-locator="jsPath">
-            <div class="locator-head"><span class="locator-name">JS Path</span><span class="locator-badge">UNAVAILABLE</span></div>
-            <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="jsPath">コピー</button></div>
-          </section>
+        <nav class="tabs" role="tablist" aria-label="Inspector views">
+          <button type="button" role="tab" data-tab="overview" data-active="true">Overview</button>
+          <button type="button" role="tab" data-tab="locators" data-active="false">Locators</button>
+          <button type="button" role="tab" data-tab="json" data-active="false">JSON</button>
+        </nav>
+
+        <div class="view-scroll">
+          <div class="tab-panel" data-panel="overview">
+            <section>
+              <div class="section-head"><h2 class="section-title">Snapshot</h2></div>
+              <div class="info-grid">
+                <div class="info-cell"><span class="info-label">Tag</span><code class="info-value" data-value="tag">未固定</code></div>
+                <div class="info-cell"><span class="info-label">Identity</span><code class="info-value" data-value="identity">—</code></div>
+                <div class="info-cell wide"><span class="info-label">Rect</span><code class="info-value" data-value="rect">—</code></div>
+                <div class="info-cell wide"><span class="info-label">Text</span><code class="info-value wrap" data-value="text">ページ上の要素へポインターを移動してください。</code></div>
+              </div>
+            </section>
+          </div>
+
+          <div class="tab-panel" data-panel="locators" hidden>
+            <section class="locator-card" data-locator="css">
+              <div class="locator-head"><span class="locator-name">CSS Selector</span><span class="locator-badge">UNAVAILABLE</span></div>
+              <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="css">Copy</button></div>
+            </section>
+            <section class="locator-card" data-locator="xpath">
+              <div class="locator-head"><span class="locator-name">XPath</span><span class="locator-badge">UNAVAILABLE</span></div>
+              <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="xpath">Copy</button></div>
+            </section>
+            <section class="locator-card" data-locator="jsPath">
+              <div class="locator-head"><span class="locator-name">JS Path</span><span class="locator-badge">UNAVAILABLE</span></div>
+              <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="jsPath">Copy</button></div>
+            </section>
+          </div>
+
+          <div class="tab-panel" data-panel="json" hidden>
+            <section>
+              <div class="json-toolbar">
+                <button type="button" data-action="copy-json">JSONをコピー</button>
+                <button type="button" data-action="save-json">JSONを保存</button>
+              </div>
+              <pre class="code-box json-preview">固定した要素のJSONがここに表示されます。</pre>
+            </section>
+          </div>
         </div>
 
-        <div class="tab-panel" data-panel="json" hidden>
-          <section class="card">
-            <div class="json-toolbar">
-              <button type="button" data-action="copy-json">JSONをコピー</button>
-              <button type="button" data-action="save-json">JSONを保存</button>
-            </div>
-            <pre class="code-box json-preview">固定した要素のJSONがここに表示されます。</pre>
-          </section>
-        </div>
-
-        <div class="footnote">local only · no storage · Esc to close</div>
+        <footer class="footer">
+          <span class="local-state">Local only · no storage</span>
+          <span><span class="keycap">Esc</span> close</span>
+        </footer>
       </div>
     `;
 
@@ -1074,6 +1225,8 @@
     ui.pickButton = panel.querySelector('[data-action="pick"]');
     ui.delayInput = panel.querySelector('input[type="number"]');
     ui.delayButton = panel.querySelector('[data-action="delay"]');
+    ui.backButton = panel.querySelector('[data-action="history-back"]');
+    ui.forwardButton = panel.querySelector('[data-action="history-forward"]');
     ui.tabButtons = Array.from(panel.querySelectorAll('[data-tab]'));
     ui.tabPanels = Array.from(panel.querySelectorAll('[data-panel]'));
     ui.parentButton = panel.querySelector('[data-nav="parent"]');
@@ -1107,6 +1260,8 @@
     panel.querySelector('[data-action="close"]').addEventListener('click', () => sendTopCommand('DEACTIVATE'));
     ui.pickButton.addEventListener('click', beginPicking);
     ui.delayButton.addEventListener('click', toggleCountdown);
+    ui.backButton.addEventListener('click', () => navigateHistory(-1));
+    ui.forwardButton.addEventListener('click', () => navigateHistory(1));
     panel.querySelector('[data-action="copy-json"]').addEventListener('click', copyJson);
     panel.querySelector('[data-action="save-json"]').addEventListener('click', downloadJson);
     for (const button of ui.tabButtons) {
@@ -1170,12 +1325,14 @@
     frameState.shadow = null;
     frameState.marker = null;
     frameState.childFrameRequests.clear();
+    frameState.selectionRegistry.clear();
     clearUICountdown();
     for (const key of Object.keys(ui)) {
       if (['activeTab'].includes(key)) continue;
-      if (key === 'tabButtons' || key === 'tabPanels') ui[key] = [];
+      if (key === 'tabButtons' || key === 'tabPanels' || key === 'history') ui[key] = [];
       else if (key === 'countdownTimer') ui[key] = null;
       else if (key === 'countdownDeadline' || key === 'countdownRemaining') ui[key] = 0;
+      else if (key === 'historyIndex') ui[key] = -1;
       else ui[key] = null;
     }
     ui.activeTab = 'overview';
@@ -1252,6 +1409,10 @@
     }
     if (command === 'SELECT_CHILD') {
       selectChildByIndex(message.childIndex);
+      return;
+    }
+    if (command === 'RESTORE_SELECTION') {
+      restoreSelection(message.selectionId);
     }
   }
 

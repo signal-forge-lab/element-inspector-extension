@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.8.0`
+`0.8.1`
 
 ## 構成
 
@@ -38,6 +38,7 @@ Top frame content.js
 ├─ Inspector window
 ├─ UI state
 ├─ countdown
+├─ selection history
 ├─ export
 └─ frame result aggregation
 
@@ -105,6 +106,8 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 
 - Inspectorウィンドウ生成
 - Overview / Locators / JSONタブ
+- 固定Hierarchy領域
+- 選択履歴の戻る・進む
 - 遅延固定カウント
 - Locator単体コピー
 - JSONコピー・保存
@@ -178,10 +181,40 @@ getNavigationState(element)
 - ドラッグ中にtransitionを使用しない
 - UIの出現アニメーションは短く、入力をロックしない
 - 半透明Materialは階層表現に限定
-- Overview / Locators / JSONへ情報を段階分離
+- Current TargetとHierarchyを固定操作領域へ集約
+- Overview / Locators / JSONは結果表示専用の軽量タブへ分離
+- タブは囲み型セグメントではなく下線型
+- フレーム情報と選択状態をヘッダへ集約
+- 閉じるアイコンはSVGをinline-flex中央配置
 - `prefers-reduced-motion`で動きを抑制
 - `prefers-reduced-transparency`で不透明背景へ切替
 - `prefers-contrast`で境界を強化
+
+## 選択履歴
+
+トップフレームUIは最大100件の履歴を保持します。
+
+```js
+{
+  selectionId,
+  frameId,
+  result
+}
+```
+
+各フレームは`selectionRegistry: Map<selectionId, Element>`を保持します。履歴復元はBackground経由で対象フレームへ`RESTORE_SELECTION`を送り、実際のElement参照を再固定します。
+
+```text
+Top UI
+↓ RESTORE_SELECTION(frameId, selectionId)
+Background
+↓ FRAME_COMMAND
+Target frame
+↓ selected event (historyMode: restore)
+Top UI
+```
+
+新規選択時は現在位置より後ろの履歴を削除します。復元対象がDOMから削除されている場合は履歴位置を変更せず、エラー状態を返します。履歴とElement参照はInspector終了時に破棄します。
 
 ## 強調枠
 
@@ -250,6 +283,7 @@ npm test
 - Background routing契約
 - iframe context handshake
 - 新UIのタブ・ドラッグ・Reduced Motion
+- 固定Hierarchy、選択履歴、SVG閉じるアイコン
 - 外部通信と永続保存の不在
 
 ## 手動確認項目
@@ -267,6 +301,9 @@ npm test
 - 親・前後兄弟
 - 最初と最後の子
 - 子一覧選択
+- 履歴の戻る・進む
+- 戻ったあとに新規選択して進む履歴が破棄されること
+- iframe削除後の履歴復元エラー
 - 対象削除時の復帰
 
 ### iframe
@@ -280,6 +317,9 @@ npm test
 ### UI
 
 - ヘッダドラッグ
+- SVG閉じるアイコンの中央揃え
+- Hierarchyが全タブで常時表示されること
+- TOP FRAME / iframeバッジがヘッダ内に収まること
 - 小さいビューポート
 - Reduced Motion
 - Reduced Transparency

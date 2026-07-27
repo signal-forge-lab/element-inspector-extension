@@ -181,6 +181,31 @@
         sendResponse({ ok: true });
         return false;
       }
+
+      if (command === 'RESTORE_SELECTION') {
+        if (!Number.isInteger(message.targetFrameId) || typeof message.selectionId !== 'string') {
+          sendResponse({ ok: false, error: 'invalid history target' });
+          return false;
+        }
+        sendToFrame(tabId, message.targetFrameId, {
+          type: MESSAGE.FRAME_COMMAND,
+          command: 'RESTORE_SELECTION',
+          selectionId: message.selectionId
+        }, (_response, error) => {
+          if (error) {
+            sendTopEvent(tabId, {
+              kind: 'status',
+              status: 'error',
+              historyRestoreFailed: true,
+              message: '履歴のiframeはすでにページから削除されています。'
+            });
+            sendResponse({ ok: false, error });
+            return;
+          }
+          sendResponse({ ok: true });
+        });
+        return true;
+      }
     }
 
     return undefined;

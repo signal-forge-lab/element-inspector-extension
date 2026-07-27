@@ -303,8 +303,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.8.0');
-  assert.equal(pkg.version, '0.8.0');
+  assert.equal(manifest.version, '0.8.1');
+  assert.equal(pkg.version, '0.8.1');
   assert.deepEqual(manifest.permissions, ['clipboardWrite']);
   assert.equal(manifest.content_scripts[0].all_frames, true);
   assert.equal(manifest.content_scripts[0].match_about_blank, true);
@@ -316,6 +316,9 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(background, /ELEMENT_INSPECTOR_TOP_COMMAND/);
   assert.match(background, /selectedFrameId/);
   assert.match(background, /broadcastToFrames/);
+  assert.match(background, /command === 'RESTORE_SELECTION'/);
+  assert.match(background, /targetFrameId/);
+  assert.match(background, /historyRestoreFailed: true/);
   assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/);
   assert.match(content, /@keyframes ei-rainbow-flow-x/);
   assert.match(content, /@keyframes ei-rainbow-flow-y/);
@@ -331,12 +334,26 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /data-nav="previous"/);
   assert.match(content, /data-nav="next"/);
   assert.match(content, /child-select/);
+  assert.match(content, /fixed-stack/);
+  assert.match(content, /hierarchy-surface/);
+  assert.match(content, /\.view-scroll \{ flex: 1 1 auto;/);
+  assert.match(content, /history-back/);
+  assert.match(content, /history-forward/);
+  assert.match(content, /selectionRegistry/);
+  assert.match(content, /historyMode: options\.historyMode \|\| 'push'/);
+  assert.match(content, /function navigateHistory/);
+  assert.match(content, /RESTORE_SELECTION/);
+  assert.match(content, /<svg viewBox="0 0 16 16"[^>]*>[\s\S]*M4 4l8 8M12 4l-8 8/);
+  assert.doesNotMatch(content, /data-action="close" aria-label="閉じる">×<\/button>/);
   assert.match(content, /data-tab="locators"/);
   assert.match(content, /CSS Selector/);
   assert.match(content, /XPath/);
   assert.match(content, /JS Path/);
   assert.match(content, /prefers-reduced-motion/);
   assert.match(content, /prefers-reduced-transparency/);
+  assert.match(content, /tabs button::after/);
+  assert.match(content, /Local only · no storage/);
+  assert.match(content, /UNIQUE · \$\{scope\}/);
   assert.match(content, /countdownDeadline/);
   assert.match(content, /JSONをコピー/);
   assert.match(content, /JSONを保存/);
