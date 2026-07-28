@@ -2,6 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
@@ -502,9 +503,14 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
     assert.equal(icon.readUInt32BE(16), size);
     assert.equal(icon.readUInt32BE(20), size);
   }
-  const iconSource = fs.readFileSync(path.join(root, 'assets/icons/main-icon-source.svg'), 'utf8');
-  assert.match(iconSource, /id="back-square"/);
-  assert.match(iconSource, /stroke="#dce8f6"/);
+  const iconSource = fs.readFileSync(path.join(root, 'assets/icons/main-icon.png'));
+  assert.equal(iconSource.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+  assert.equal(iconSource.readUInt32BE(16), 256);
+  assert.equal(iconSource.readUInt32BE(20), 256);
+  assert.equal(
+    crypto.createHash('sha256').update(iconSource).digest('hex'),
+    '95bb6705a15c7adf35733ccbf2fcfe360f6c74bf399c3f39bf02d2f0a1744735'
+  );
   assert.deepEqual(manifest.permissions, ['clipboardWrite']);
   assert.equal(manifest.content_scripts[0].all_frames, true);
   assert.equal(manifest.content_scripts[0].match_about_blank, true);
