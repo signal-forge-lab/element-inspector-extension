@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.10.0';
+  const EXTENSION_VERSION = '0.12.0';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -10,6 +10,27 @@
   const MIN_PANEL_WIDTH = 360;
   const MIN_PANEL_HEIGHT = 440;
   const DEFAULT_PANEL_WIDTH = 468;
+  const EDIT_STYLE_MARKER = 'data-element-inspector-edit-style';
+  const EDITABLE_PROPERTIES = Object.freeze([
+    ['width', 'Width'], ['height', 'Height'],
+    ['min-width', 'Min width'], ['max-width', 'Max width'],
+    ['min-height', 'Min height'], ['max-height', 'Max height'],
+    ['margin', 'Margin'], ['margin-top', 'Margin top'], ['margin-right', 'Margin right'],
+    ['margin-bottom', 'Margin bottom'], ['margin-left', 'Margin left'],
+    ['padding', 'Padding'], ['padding-top', 'Padding top'], ['padding-right', 'Padding right'],
+    ['padding-bottom', 'Padding bottom'], ['padding-left', 'Padding left'],
+    ['display', 'Display'], ['position', 'Position'],
+    ['top', 'Top'], ['right', 'Right'], ['bottom', 'Bottom'], ['left', 'Left'],
+    ['gap', 'Gap'], ['row-gap', 'Row gap'], ['column-gap', 'Column gap'],
+    ['flex-direction', 'Flex direction'], ['justify-content', 'Justify content'], ['align-items', 'Align items'],
+    ['grid-template-columns', 'Grid columns'],
+    ['color', 'Color'], ['background-color', 'Background'],
+    ['font-size', 'Font size'], ['line-height', 'Line height'],
+    ['border-radius', 'Border radius'],
+    ['overflow', 'Overflow'], ['overflow-x', 'Overflow X'], ['overflow-y', 'Overflow Y'],
+    ['z-index', 'Z-index']
+  ]);
+  const EDITABLE_PROPERTY_SET = new Set(EDITABLE_PROPERTIES.map(([property]) => property));
 
   const MESSAGE = Object.freeze({
     SET_ACTIVE: 'ELEMENT_INSPECTOR_SET_ACTIVE',
@@ -28,6 +49,7 @@
     mode: 'idle',
     hoveredElement: null,
     selectedElement: null,
+    currentSelectionId: null,
     highlightedElement: null,
     animationFrameId: null,
     host: null,
@@ -36,6 +58,11 @@
     selectionRegistry: new Map(),
     pinnedSelectionIds: new Set(),
     frameToken: createToken(),
+    editAttributeName: null,
+    editRecords: new Map(),
+    editElementIds: new WeakMap(),
+    editUndoStack: [],
+    editStyleResources: new Map(),
     childFrameRequests: new Map(),
     frameContext: {
       depth: 0,
@@ -92,6 +119,29 @@
     layoutStylesGrid: null,
     flexGridStylesGrid: null,
     typographyStylesGrid: null,
+    editPropertySelect: null,
+    editValueInput: null,
+    editApplyButton: null,
+    editUndoButton: null,
+    editResetCurrentButton: null,
+    editResetAllButton: null,
+    editCopyCssButton: null,
+    editCurrentValue: null,
+    editSummary: null,
+    editList: null,
+    a11yRoleValue: null,
+    a11yRoleSourceValue: null,
+    a11yNameValue: null,
+    a11yNameSourceValue: null,
+    a11yDescriptionValue: null,
+    a11yLabelsValue: null,
+    a11yFocusValue: null,
+    a11yTabIndexValue: null,
+    a11yHeadingValue: null,
+    a11yStatesGrid: null,
+    a11yAriaGrid: null,
+    eventSummaryValue: null,
+    eventList: null,
     cssValue: null,
     cssBadge: null,
     xpathValue: null,
@@ -119,6 +169,8 @@
     if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
     return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   }
+
+  frameState.editAttributeName = `data-ei-edit-${createToken().replace(/[^a-z0-9-]/gi, '').toLowerCase()}`;
 
   function isElement(value) {
     return value instanceof Element;
@@ -269,6 +321,7 @@
   function clearFrameSelection() {
     frameState.hoveredElement = null;
     frameState.selectedElement = null;
+    frameState.currentSelectionId = null;
     setHighlightTarget(null);
   }
 
@@ -288,6 +341,293 @@
         break;
       }
       if (!removed) break;
+    }
+  }
+
+  function escapeCssAttributeValue(value) {
+    return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
+  function getComputedPropertyValue(element, property) {
+    const view = element?.ownerDocument?.defaultView || window;
+    const style = view?.getComputedStyle?.(element);
+    const value = style?.getPropertyValue?.(property);
+    return typeof value === 'string' && value.trim() ? value.trim() : '—';
+  }
+
+  function createEditStyleResource(root) {
+    if (!root) return null;
+    try {
+      if (typeof CSSStyleSheet === 'function' && Array.isArray(root.adoptedStyleSheets)) {
+        const sheet = new CSSStyleSheet();
+        root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet];
+        return { root, sheet, style: null };
+      }
+    } catch {}
+
+    const style = document.createElement('style');
+    style.setAttribute(EDIT_STYLE_MARKER, 'true');
+    style.setAttribute(ROOT_ATTRIBUTE, 'temporary-edit-style');
+    if (root.nodeType === 9) {
+      (root.head || root.documentElement)?.appendChild(style);
+    } else if (typeof root.appendChild === 'function') {
+      root.appendChild(style);
+    }
+    return style.isConnected || root.nodeType === 11 ? { root, sheet: null, style } : null;
+  }
+
+  function setEditStyleResourceText(resource, cssText) {
+    if (!resource) return;
+    if (resource.sheet) {
+      try {
+        resource.sheet.replaceSync(cssText);
+        return;
+      } catch {}
+    }
+    if (resource.style) resource.style.textContent = cssText;
+  }
+
+  function disposeEditStyleResource(resource) {
+    if (!resource) return;
+    if (resource.sheet) {
+      try {
+        resource.root.adoptedStyleSheets = Array.from(resource.root.adoptedStyleSheets || [])
+          .filter(sheet => sheet !== resource.sheet);
+      } catch {}
+    }
+    resource.style?.remove();
+  }
+
+  function restoreEditAttribute(record) {
+    const element = record?.element;
+    if (!isElement(element)) return;
+    if (record.hadOriginalAttribute) {
+      element.setAttribute(frameState.editAttributeName, record.originalAttributeValue || '');
+    } else {
+      element.removeAttribute(frameState.editAttributeName);
+    }
+  }
+
+  function removeEditRecord(record) {
+    if (!record) return;
+    restoreEditAttribute(record);
+    frameState.editRecords.delete(record.editId);
+    if (isElement(record.element)) frameState.editElementIds.delete(record.element);
+  }
+
+  function ensureEditRecord(element) {
+    const existingId = frameState.editElementIds.get(element);
+    const existing = existingId ? frameState.editRecords.get(existingId) : null;
+    if (existing) return existing;
+
+    const editId = createToken();
+    const attributeName = frameState.editAttributeName;
+    const locator = globalThis.ElementInspector?.generateCssLocator?.(element);
+    const jsPath = globalThis.ElementInspector?.generateJsPath?.(element, locator);
+    const shadow = globalThis.ElementInspector?.collectShadowContext?.(element);
+    const record = {
+      editId,
+      element,
+      root: element.getRootNode?.() || document,
+      hadOriginalAttribute: element.hasAttribute(attributeName),
+      originalAttributeValue: element.getAttribute(attributeName),
+      selector: locator?.value || null,
+      selectorScope: locator?.scope || 'document',
+      jsPath: jsPath?.value || null,
+      shadowDepth: shadow?.depth || 0,
+      declarations: new Map()
+    };
+    element.setAttribute(attributeName, editId);
+    frameState.editElementIds.set(element, editId);
+    frameState.editRecords.set(editId, record);
+    return record;
+  }
+
+  function declarationBlock(record) {
+    return Array.from(record.declarations.values())
+      .map(item => `  ${item.property}: ${item.value} !important;`)
+      .join('\n');
+  }
+
+  function appliedRuleText(record) {
+    const selector = `[${frameState.editAttributeName}="${escapeCssAttributeValue(record.editId)}"]`;
+    return `${selector} {\n${declarationBlock(record)}\n}`;
+  }
+
+  function copiedRuleText(record) {
+    const selector = record.selector || `[${frameState.editAttributeName}="${escapeCssAttributeValue(record.editId)}"]`;
+    const prefix = record.shadowDepth > 0
+      ? `/* Apply inside open Shadow Root depth ${record.shadowDepth}${record.jsPath ? `\nTarget: ${record.jsPath}` : ''} */\n`
+      : '';
+    return `${prefix}${selector} {\n${declarationBlock(record)}\n}`;
+  }
+
+  function renderTemporaryEditStyles() {
+    const byRoot = new Map();
+    for (const record of Array.from(frameState.editRecords.values())) {
+      if (!isElement(record.element) || !record.element.isConnected || !record.declarations.size) {
+        if (!record.declarations.size || !record.element?.isConnected) removeEditRecord(record);
+        continue;
+      }
+      const root = record.element.getRootNode?.() || document;
+      record.root = root;
+      if (!byRoot.has(root)) byRoot.set(root, []);
+      byRoot.get(root).push(appliedRuleText(record));
+    }
+
+    for (const [root, resource] of Array.from(frameState.editStyleResources.entries())) {
+      if (byRoot.has(root)) continue;
+      disposeEditStyleResource(resource);
+      frameState.editStyleResources.delete(root);
+    }
+
+    for (const [root, rules] of byRoot) {
+      let resource = frameState.editStyleResources.get(root);
+      if (!resource) {
+        resource = createEditStyleResource(root);
+        if (resource) frameState.editStyleResources.set(root, resource);
+      }
+      setEditStyleResourceText(resource, rules.join('\n\n'));
+    }
+  }
+
+  function sanitizeTemporaryEditArtifacts(result) {
+    if (!result) return result;
+    const attributeName = frameState.editAttributeName;
+    const removeAttribute = attributes => {
+      if (attributes && Object.prototype.hasOwnProperty.call(attributes, attributeName)) {
+        delete attributes[attributeName];
+      }
+    };
+    removeAttribute(result.selectedAttributes);
+    removeAttribute(result.controlAttributes);
+    for (const ancestor of result.ancestors || []) removeAttribute(ancestor.attributes);
+    for (const host of result.shadow?.hosts || []) removeAttribute(host.attributes);
+    const pattern = new RegExp(`\\s${attributeName}="[^"]*"`, 'g');
+    result.selectedOuterHTML = String(result.selectedOuterHTML || '').replace(pattern, '');
+    result.outerHTML = String(result.outerHTML || '').replace(pattern, '');
+    return result;
+  }
+
+  function buildTemporaryEditSnapshot(element) {
+    const editId = frameState.editElementIds.get(element);
+    const record = editId ? frameState.editRecords.get(editId) : null;
+    const declarations = record
+      ? Array.from(record.declarations.values()).map(item => ({
+          property: item.property,
+          before: item.before,
+          value: item.value,
+          after: getComputedPropertyValue(element, item.property)
+        }))
+      : [];
+    const currentValues = Object.fromEntries(
+      EDITABLE_PROPERTIES.map(([property]) => [property, getComputedPropertyValue(element, property)])
+    );
+    const activeRecords = Array.from(frameState.editRecords.values()).filter(item => item.declarations.size > 0);
+    return {
+      active: declarations.length > 0,
+      targetId: record?.editId || null,
+      frameEditCount: activeRecords.length,
+      undoAvailable: frameState.editUndoStack.length > 0,
+      declarations,
+      currentValues,
+      cssText: record?.declarations.size ? copiedRuleText(record) : '',
+      allCssText: activeRecords.map(copiedRuleText).join('\n\n')
+    };
+  }
+
+  function refreshSelectedAfterEdit(reason, statusMessage) {
+    const selected = frameState.selectedElement;
+    if (!isElement(selected) || !selected.isConnected) {
+      emitFrameEvent({ kind: 'status', status: 'error', message: '編集対象がページから削除されています。' });
+      return;
+    }
+    inspectAndSelect(selected, reason, {
+      selectionId: frameState.currentSelectionId || createToken(),
+      historyMode: 'refresh',
+      statusMessage
+    });
+  }
+
+  function applyTemporaryEdit(property, value) {
+    const selected = frameState.selectedElement;
+    const normalizedProperty = String(property || '').trim().toLowerCase();
+    const normalizedValue = String(value || '').trim();
+    if (!isElement(selected) || !selected.isConnected) {
+      emitFrameEvent({ kind: 'status', status: 'error', message: '固定中の編集対象がありません。' });
+      return;
+    }
+    if (!EDITABLE_PROPERTY_SET.has(normalizedProperty)) {
+      emitFrameEvent({ kind: 'status', status: 'error', message: 'このCSSプロパティは一時編集の対象外です。' });
+      return;
+    }
+    if (!normalizedValue || /!important/i.test(normalizedValue)) {
+      emitFrameEvent({ kind: 'status', status: 'error', message: 'CSS値を入力してください。!importantは自動付与されます。' });
+      return;
+    }
+    if (globalThis.CSS?.supports && !globalThis.CSS.supports(normalizedProperty, normalizedValue)) {
+      emitFrameEvent({ kind: 'status', status: 'error', message: `${normalizedProperty}: ${normalizedValue} は有効なCSS値ではありません。` });
+      return;
+    }
+
+    const record = ensureEditRecord(selected);
+    const previous = record.declarations.get(normalizedProperty) || null;
+    if (previous?.value === normalizedValue) {
+      emitFrameEvent({ kind: 'status', status: 'normal', message: '同じ編集値がすでに適用されています。' });
+      return;
+    }
+    const before = previous?.before || getComputedPropertyValue(selected, normalizedProperty);
+    frameState.editUndoStack.push({
+      editId: record.editId,
+      property: normalizedProperty,
+      previous: previous ? { ...previous } : null
+    });
+    record.declarations.set(normalizedProperty, {
+      property: normalizedProperty,
+      before,
+      value: normalizedValue
+    });
+    renderTemporaryEditStyles();
+    refreshSelectedAfterEdit('一時編集', `${normalizedProperty}: ${normalizedValue} を一時適用しました。`);
+  }
+
+  function undoTemporaryEdit() {
+    while (frameState.editUndoStack.length) {
+      const operation = frameState.editUndoStack.pop();
+      const record = frameState.editRecords.get(operation.editId);
+      if (!record) continue;
+      if (operation.previous) record.declarations.set(operation.property, operation.previous);
+      else record.declarations.delete(operation.property);
+      if (!record.declarations.size) removeEditRecord(record);
+      renderTemporaryEditStyles();
+      refreshSelectedAfterEdit('編集Undo', '直前の一時編集を元に戻しました。');
+      return;
+    }
+    emitFrameEvent({ kind: 'status', status: 'normal', message: '元に戻せる一時編集がありません。' });
+  }
+
+  function resetCurrentTemporaryEdits() {
+    const selected = frameState.selectedElement;
+    const editId = isElement(selected) ? frameState.editElementIds.get(selected) : null;
+    const record = editId ? frameState.editRecords.get(editId) : null;
+    if (!record) {
+      emitFrameEvent({ kind: 'status', status: 'normal', message: '現在の対象には一時編集がありません。' });
+      return;
+    }
+    removeEditRecord(record);
+    frameState.editUndoStack = frameState.editUndoStack.filter(operation => operation.editId !== editId);
+    renderTemporaryEditStyles();
+    refreshSelectedAfterEdit('編集Reset', '現在の対象の一時編集をすべて解除しました。');
+  }
+
+  function resetAllTemporaryEdits(options = {}) {
+    const hadEdits = frameState.editRecords.size > 0;
+    for (const record of Array.from(frameState.editRecords.values())) removeEditRecord(record);
+    frameState.editUndoStack = [];
+    for (const resource of frameState.editStyleResources.values()) disposeEditStyleResource(resource);
+    frameState.editStyleResources.clear();
+    if (options.refresh !== false && isElement(frameState.selectedElement) && frameState.selectedElement.isConnected) {
+      refreshSelectedAfterEdit('全編集Reset', hadEdits ? 'すべての一時編集を解除しました。' : '一時編集はありません。');
     }
   }
 
@@ -316,9 +656,10 @@
     setHighlightTarget(element);
 
     const selectionId = options.selectionId || createToken();
+    frameState.currentSelectionId = selectionId;
     rememberSelection(selectionId, element);
 
-    const result = globalThis.ElementInspector.inspectElement(element);
+    const result = sanitizeTemporaryEditArtifacts(globalThis.ElementInspector.inspectElement(element));
     result.frame = buildFrameInfo();
     result.locators.context = {
       frameRelative: !frameState.isTopFrame,
@@ -326,11 +667,13 @@
       framePath: frameState.frameContext.path,
       shadowDepth: result.shadow?.depth || 0
     };
+    result.temporaryEdits = buildTemporaryEditSnapshot(element);
     emitFrameEvent({
       kind: 'selected',
       reason,
       selectionId,
       historyMode: options.historyMode || 'push',
+      statusMessage: options.statusMessage || null,
       result
     });
   }
@@ -657,6 +1000,154 @@
     renderStylePropertyGrid(ui.typographyStylesGrid, computed?.typography);
   }
 
+  function renderAuditRows(container, entries, emptyText = '情報なし') {
+    if (!container) return;
+    container.replaceChildren();
+    const filtered = entries.filter(([, value]) => value !== undefined && value !== null && value !== '');
+    if (!filtered.length) {
+      const empty = document.createElement('div');
+      empty.className = 'audit-empty';
+      empty.textContent = emptyText;
+      container.appendChild(empty);
+      return;
+    }
+    for (const [labelText, rawValue] of filtered) {
+      const row = document.createElement('div');
+      row.className = 'audit-row';
+      const label = document.createElement('span');
+      label.className = 'audit-label';
+      label.textContent = labelText;
+      const value = document.createElement('code');
+      value.className = 'audit-value';
+      value.textContent = typeof rawValue === 'boolean' ? (rawValue ? 'true' : 'false') : String(rawValue);
+      row.append(label, value);
+      container.appendChild(row);
+    }
+  }
+
+  function renderEditView(result) {
+    const edits = result?.temporaryEdits;
+    const hasResult = Boolean(result);
+    const property = ui.editPropertySelect?.value || 'width';
+    if (ui.editCurrentValue) {
+      ui.editCurrentValue.textContent = hasResult
+        ? edits?.currentValues?.[property] || '—'
+        : '対象を固定してください';
+    }
+    if (ui.editApplyButton) ui.editApplyButton.disabled = !hasResult;
+    if (ui.editValueInput) ui.editValueInput.disabled = !hasResult;
+    if (ui.editPropertySelect) ui.editPropertySelect.disabled = !hasResult;
+    if (ui.editUndoButton) ui.editUndoButton.disabled = !edits?.undoAvailable;
+    if (ui.editResetCurrentButton) ui.editResetCurrentButton.disabled = !edits?.active;
+    if (ui.editResetAllButton) ui.editResetAllButton.disabled = !(edits?.frameEditCount > 0);
+    if (ui.editCopyCssButton) ui.editCopyCssButton.disabled = !edits?.allCssText;
+    if (ui.editSummary) {
+      const propertyCount = edits?.declarations?.length || 0;
+      const targetCount = edits?.frameEditCount || 0;
+      ui.editSummary.textContent = hasResult
+        ? `${propertyCount} properties · ${targetCount} edited targets in frame`
+        : 'Temporary · removed on close or reload';
+    }
+    if (!ui.editList) return;
+    ui.editList.replaceChildren();
+    const declarations = edits?.declarations || [];
+    if (!declarations.length) {
+      const empty = document.createElement('div');
+      empty.className = 'edit-empty';
+      empty.textContent = hasResult ? '現在の対象には一時編集がありません。' : '要素を固定すると編集できます。';
+      ui.editList.appendChild(empty);
+      return;
+    }
+    for (const declaration of declarations) {
+      const row = document.createElement('div');
+      row.className = 'edit-row';
+      const propertyNode = document.createElement('code');
+      propertyNode.className = 'edit-property';
+      propertyNode.textContent = declaration.property;
+      const values = document.createElement('div');
+      values.className = 'edit-values';
+      const before = document.createElement('code');
+      before.textContent = declaration.before || '—';
+      const arrow = document.createElement('span');
+      arrow.textContent = '→';
+      const after = document.createElement('code');
+      after.textContent = declaration.value || declaration.after || '—';
+      values.append(before, arrow, after);
+      row.append(propertyNode, values);
+      ui.editList.appendChild(row);
+    }
+  }
+
+  function renderAccessibilityView(result) {
+    const accessibility = result?.accessibility;
+    const events = result?.events;
+    if (ui.a11yRoleValue) ui.a11yRoleValue.textContent = accessibility?.role || 'none';
+    if (ui.a11yRoleSourceValue) {
+      ui.a11yRoleSourceValue.textContent = accessibility?.explicitRole
+        ? `explicit: ${accessibility.explicitRole}`
+        : accessibility?.implicitRole
+          ? `implicit: ${accessibility.implicitRole}`
+          : 'no role';
+    }
+    if (ui.a11yNameValue) ui.a11yNameValue.textContent = accessibility?.name?.value || '名前なし';
+    if (ui.a11yNameSourceValue) {
+      const approximate = accessibility?.name?.approximate ? ' · estimated' : '';
+      ui.a11yNameSourceValue.textContent = `${accessibility?.name?.source || 'none'}${approximate}`;
+    }
+    if (ui.a11yDescriptionValue) ui.a11yDescriptionValue.textContent = accessibility?.description?.value || '説明なし';
+    if (ui.a11yLabelsValue) ui.a11yLabelsValue.textContent = accessibility?.labels?.join(' · ') || 'ラベルなし';
+    if (ui.a11yFocusValue) {
+      ui.a11yFocusValue.textContent = accessibility
+        ? accessibility.focus.focusable
+          ? accessibility.focus.sequentiallyFocusable ? 'Focusable · sequential' : 'Focusable · programmatic'
+          : 'Not focusable'
+        : '—';
+    }
+    if (ui.a11yTabIndexValue) {
+      ui.a11yTabIndexValue.textContent = accessibility?.focus?.tabIndex == null
+        ? '—'
+        : String(accessibility.focus.tabIndex);
+    }
+    if (ui.a11yHeadingValue) ui.a11yHeadingValue.textContent = accessibility?.headingLevel ? `Level ${accessibility.headingLevel}` : '—';
+    renderAuditRows(ui.a11yStatesGrid, Object.entries(accessibility?.states || {}), '状態情報なし');
+    renderAuditRows(ui.a11yAriaGrid, Object.entries(accessibility?.ariaAttributes || {}), 'ARIA属性なし');
+
+    if (ui.eventSummaryValue) {
+      ui.eventSummaryValue.textContent = events?.hasAny
+        ? `${events.types.length} types · DOM0 / inline only`
+        : '検出可能なイベントなし';
+    }
+    if (!ui.eventList) return;
+    ui.eventList.replaceChildren();
+    const handlers = [
+      ...(events?.attributes || []).map(item => ({ ...item, source: 'attribute' })),
+      ...(events?.properties || []).map(item => ({ ...item, source: 'property' }))
+    ];
+    if (!handlers.length) {
+      const empty = document.createElement('div');
+      empty.className = 'audit-empty';
+      empty.textContent = 'onclick属性やDOM0プロパティは検出されませんでした。';
+      ui.eventList.appendChild(empty);
+    } else {
+      for (const handler of handlers) {
+        const item = document.createElement('div');
+        item.className = 'event-item';
+        const head = document.createElement('div');
+        head.className = 'event-head';
+        const type = document.createElement('strong');
+        type.textContent = handler.type;
+        const source = document.createElement('span');
+        source.textContent = handler.source;
+        head.append(type, source);
+        const preview = document.createElement('code');
+        preview.className = 'event-preview';
+        preview.textContent = handler.preview || 'handler';
+        item.append(head, preview);
+        ui.eventList.appendChild(item);
+      }
+    }
+  }
+
   function isCurrentPinned() {
     return Boolean(ui.currentSelectionId) && ui.pins.some(pin =>
       pin.selectionId === ui.currentSelectionId && pin.frameId === ui.selectedFrameId
@@ -812,6 +1303,8 @@
       setLocatorView(ui.jsPathValue, ui.jsPathBadge, null, false);
       ui.jsonPreview.textContent = '固定した要素のJSONがここに表示されます。';
       renderStylesView(null);
+      renderEditView(null);
+      renderAccessibilityView(null);
       return;
     }
 
@@ -839,6 +1332,8 @@
     setLocatorView(ui.jsPathValue, ui.jsPathBadge, result.locators?.jsPath, frameRelative);
     ui.jsonPreview.textContent = JSON.stringify(result, null, 2);
     renderStylesView(result);
+    renderEditView(result);
+    renderAccessibilityView(result);
   }
 
   function setActiveTab(tabName) {
@@ -1033,6 +1528,35 @@
     }
   }
 
+  function applyEditFromUI() {
+    if (!ui.result || !Number.isInteger(ui.selectedFrameId)) {
+      setUIStatus('編集する要素を固定してください。', 'error');
+      return;
+    }
+    const property = ui.editPropertySelect?.value;
+    const value = ui.editValueInput?.value?.trim();
+    if (!value) {
+      setUIStatus('CSS値を入力してください。', 'error');
+      ui.editValueInput?.focus();
+      return;
+    }
+    sendTopCommand('APPLY_EDIT', { property, value });
+  }
+
+  async function copyTemporaryEditCss() {
+    const cssText = ui.result?.temporaryEdits?.allCssText || ui.result?.temporaryEdits?.cssText;
+    if (!cssText) {
+      setUIStatus('コピーできる一時編集CSSがありません。', 'error');
+      return;
+    }
+    try {
+      await copyText(cssText);
+      setUIStatus('一時編集CSSをコピーしました。', 'success');
+    } catch (error) {
+      setUIStatus(error instanceof Error ? error.message : String(error), 'error');
+    }
+  }
+
   async function copyJson() {
     if (!ui.result) return;
     try {
@@ -1076,17 +1600,22 @@
 
     if (event.kind === 'selected' && event.result) {
       clearUICountdown();
-      if (event.historyMode === 'restore' && ui.pendingHistoryIndex !== null) {
+      if (event.historyMode === 'refresh') {
+        if (ui.historyIndex >= 0 && ui.history[ui.historyIndex]) {
+          ui.history[ui.historyIndex].result = event.result;
+        }
+      } else if (event.historyMode === 'restore' && ui.pendingHistoryIndex !== null) {
         ui.historyIndex = ui.pendingHistoryIndex;
       } else {
         pushSelectionHistory(event);
+        if (ui.editValueInput) ui.editValueInput.value = '';
       }
       ui.pendingHistoryIndex = null;
       ui.result = event.result;
       ui.selectedFrameId = event.frameId;
       ui.currentSelectionId = event.selectionId || null;
       setUIMode('fixed');
-      setUIStatus(`${event.reason || '選択'}で対象を固定しました。`, 'success');
+      setUIStatus(event.statusMessage || `${event.reason || '選択'}で対象を固定しました。`, 'success');
       renderUI();
       return;
     }
@@ -1535,6 +2064,55 @@
       .style-property:last-child { border-bottom: 0; }
       .style-property-name { overflow: hidden; color: var(--ei-faint); text-overflow: ellipsis; white-space: nowrap; font-size: 8.5px; }
       .style-property-value { overflow: hidden; color: #29313a; text-align: right; text-overflow: ellipsis; white-space: nowrap; font: 9.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .edit-grid, .audit-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+      .edit-section, .audit-section {
+        min-width: 0;
+        border: 1px solid var(--ei-line);
+        border-radius: 11px;
+        padding: 10px;
+        background: var(--ei-surface);
+        box-shadow: 0 1px 0 rgba(255,255,255,.72) inset;
+      }
+      .edit-section-title, .audit-section-title { margin: 0 0 8px; color: #69737e; font-size: 8.5px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; }
+      .edit-form { display: grid; grid-template-columns: minmax(120px,.82fr) minmax(0,1.18fr) auto; gap: 7px; align-items: end; }
+      .edit-field { min-width: 0; }
+      .edit-field label { display: block; margin-bottom: 4px; color: var(--ei-faint); font-size: 8px; letter-spacing: .055em; text-transform: uppercase; }
+      .edit-current { margin-top: 8px; border: 1px solid var(--ei-line); border-radius: 8px; padding: 7px 8px; background: rgba(32,38,45,.04); }
+      .edit-current span { display: block; color: var(--ei-faint); font-size: 8px; text-transform: uppercase; letter-spacing: .055em; }
+      .edit-current code { display: block; margin-top: 3px; overflow: hidden; color: #29313a; text-overflow: ellipsis; white-space: nowrap; font: 10px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .edit-toolbar { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+      .edit-toolbar button { min-height: 28px; padding: 4px 8px; font-size: 9px; }
+      .edit-note { margin-top: 8px; color: var(--ei-muted); font-size: 8.5px; }
+      .edit-summary { color: var(--ei-muted); font-size: 8.5px; }
+      .edit-list { display: grid; gap: 6px; }
+      .edit-empty, .audit-empty { border: 1px dashed var(--ei-line-strong); border-radius: 9px; padding: 14px 10px; color: var(--ei-muted); text-align: center; font-size: 9px; }
+      .edit-row { display: grid; grid-template-columns: minmax(110px,.8fr) minmax(0,1.2fr); gap: 8px; align-items: center; border-bottom: 1px solid rgba(32,38,45,.08); padding: 6px 0; }
+      .edit-row:last-child { border-bottom: 0; }
+      .edit-property { overflow: hidden; color: #39424c; text-overflow: ellipsis; white-space: nowrap; font: 9.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .edit-values { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 5px; align-items: center; min-width: 0; }
+      .edit-values code { overflow: hidden; color: var(--ei-muted); text-overflow: ellipsis; white-space: nowrap; font: 9px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .edit-values code:last-child { color: #29313a; text-align: right; }
+      .edit-values span { color: var(--ei-faint); }
+      .audit-semantics { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+      .audit-card { min-width: 0; border: 1px solid var(--ei-line); border-radius: 9px; padding: 8px; background: rgba(255,255,255,.58); }
+      .audit-card.wide { grid-column: 1 / -1; }
+      .audit-card span { display: block; color: var(--ei-faint); font-size: 8px; text-transform: uppercase; letter-spacing: .055em; }
+      .audit-card code { display: block; margin-top: 3px; overflow: hidden; color: #29313a; text-overflow: ellipsis; white-space: nowrap; font: 9.5px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .audit-card code.wrap { max-height: 62px; overflow: auto; white-space: normal; overflow-wrap: anywhere; }
+      .audit-subvalue { margin-top: 2px !important; color: var(--ei-muted) !important; font-size: 8px !important; }
+      .audit-list { display: grid; gap: 0; }
+      .audit-row { display: grid; grid-template-columns: minmax(110px,.8fr) minmax(0,1.2fr); gap: 8px; align-items: baseline; border-bottom: 1px solid rgba(32,38,45,.08); padding: 6px 0; }
+      .audit-row:last-child { border-bottom: 0; }
+      .audit-label { overflow: hidden; color: var(--ei-faint); text-overflow: ellipsis; white-space: nowrap; font-size: 8.5px; }
+      .audit-value { overflow: hidden; color: #29313a; text-align: right; text-overflow: ellipsis; white-space: nowrap; font: 9.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .event-summary { display: block; margin-bottom: 8px; color: var(--ei-muted); font-size: 8.5px; }
+      .event-list { display: grid; gap: 7px; }
+      .event-item { min-width: 0; border: 1px solid var(--ei-line); border-radius: 9px; padding: 8px; background: rgba(32,38,45,.035); }
+      .event-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .event-head strong { color: #39424c; font-size: 9.5px; }
+      .event-head span { color: var(--ei-faint); font-size: 8px; text-transform: uppercase; letter-spacing: .055em; }
+      .event-preview { display: block; max-height: 72px; margin-top: 6px; overflow: auto; color: #313943; white-space: pre-wrap; overflow-wrap: anywhere; font: 9px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .event-limitations { margin: 8px 0 0; padding-left: 16px; color: var(--ei-muted); font-size: 8.5px; }
       .locator-card { padding: 9px 0 10px; border-bottom: 1px solid rgba(32,38,45,.08); }
       .locator-card:first-child { padding-top: 0; }
       .locator-card:last-child { border-bottom: 0; }
@@ -1633,6 +2211,7 @@
       .panel[data-density="comfortable"] .view-scroll { padding-top: 13px; }
       .panel[data-density="comfortable"] .overview-section, .panel[data-density="comfortable"] .compare-card { padding: 13px; }
       .panel[data-density="comfortable"] .styles-section { padding: 13px; }
+      .panel[data-density="comfortable"] .edit-section, .panel[data-density="comfortable"] .audit-section { padding: 13px; }
       @container inspector (min-width: 440px) {
         .overview-grid { grid-template-columns: 1.12fr .9fr .98fr; }
       }
@@ -1641,6 +2220,8 @@
         .locator-body { grid-template-columns: minmax(0,1fr) 62px; }
         .styles-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
         .box-model-section { grid-column: 1 / -1; }
+        .audit-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+        .event-section { grid-column: 1 / -1; }
       }
       @container inspector (min-width: 920px) {
         .compare-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
@@ -1651,6 +2232,7 @@
         .pin-button { grid-column: 1 / -1; }
         .nav-grid { grid-template-columns: repeat(3, 1fr); }
         .tabs { gap: 14px; }
+        .edit-form { grid-template-columns: 1fr; }
       }
       @media (max-width: 380px) {
         .panel { width: calc(100vw - 16px); top: 8px; right: 8px; max-width: none; }
@@ -1753,6 +2335,8 @@
         <nav class="tabs" role="tablist" aria-label="Inspector views">
           <button type="button" role="tab" data-tab="overview" data-active="true">Overview</button>
           <button type="button" role="tab" data-tab="styles" data-active="false">Styles</button>
+          <button type="button" role="tab" data-tab="edit" data-active="false">Edit</button>
+          <button type="button" role="tab" data-tab="a11y" data-active="false">A11y</button>
           <button type="button" role="tab" data-tab="locators" data-active="false">Locators</button>
           <button type="button" role="tab" data-tab="compare" data-active="false" hidden>Compare</button>
           <button type="button" role="tab" data-tab="json" data-active="false">JSON</button>
@@ -1824,6 +2408,98 @@
               <section class="styles-section">
                 <h2 class="styles-section-title">Typography</h2>
                 <div class="style-property-grid" data-style-group="typography"></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-panel="edit" hidden>
+            <div class="edit-grid">
+              <section class="edit-section">
+                <h2 class="edit-section-title">Temporary CSS editor</h2>
+                <div class="edit-form">
+                  <div class="edit-field">
+                    <label for="ei-edit-property">Property</label>
+                    <select id="ei-edit-property" data-edit="property">
+                      ${EDITABLE_PROPERTIES.map(([property, label]) => `<option value="${property}">${label}</option>`).join('')}
+                    </select>
+                  </div>
+                  <div class="edit-field">
+                    <label for="ei-edit-value">Value</label>
+                    <input id="ei-edit-value" type="text" data-edit="value" placeholder="例: 320px / flex / #20262d">
+                  </div>
+                  <button class="primary" type="button" data-action="apply-edit">適用</button>
+                </div>
+                <div class="edit-current">
+                  <span>Current computed value</span>
+                  <code data-edit="current-value">対象を固定してください</code>
+                </div>
+                <div class="edit-toolbar">
+                  <button type="button" data-action="undo-edit">Undo</button>
+                  <button type="button" data-action="reset-current-edits">対象をReset</button>
+                  <button type="button" data-action="reset-all-edits">全Reset</button>
+                  <button type="button" data-action="copy-edit-css">編集CSSをコピー</button>
+                </div>
+                <p class="edit-note">既存のstyle属性は変更しません。Inspector終了またはページ再読み込みで完全に破棄されます。</p>
+              </section>
+              <section class="edit-section">
+                <div class="section-head">
+                  <h2 class="edit-section-title" style="margin:0">Active edits</h2>
+                  <span class="edit-summary">Temporary · removed on close or reload</span>
+                </div>
+                <div class="edit-list"></div>
+              </section>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-panel="a11y" hidden>
+            <div class="audit-grid">
+              <section class="audit-section">
+                <h2 class="audit-section-title">Semantics</h2>
+                <div class="audit-semantics">
+                  <div class="audit-card">
+                    <span>Role</span>
+                    <code data-a11y="role">none</code>
+                    <code class="audit-subvalue" data-a11y="role-source">no role</code>
+                  </div>
+                  <div class="audit-card">
+                    <span>Accessible name</span>
+                    <code data-a11y="name">名前なし</code>
+                    <code class="audit-subvalue" data-a11y="name-source">none</code>
+                  </div>
+                  <div class="audit-card wide">
+                    <span>Description</span>
+                    <code class="wrap" data-a11y="description">説明なし</code>
+                  </div>
+                  <div class="audit-card wide">
+                    <span>Labels</span>
+                    <code class="wrap" data-a11y="labels">ラベルなし</code>
+                  </div>
+                </div>
+              </section>
+              <section class="audit-section">
+                <h2 class="audit-section-title">Focus</h2>
+                <div class="audit-semantics">
+                  <div class="audit-card wide"><span>Focusability</span><code data-a11y="focus">—</code></div>
+                  <div class="audit-card"><span>Tab index</span><code data-a11y="tab-index">—</code></div>
+                  <div class="audit-card"><span>Heading</span><code data-a11y="heading">—</code></div>
+                </div>
+              </section>
+              <section class="audit-section">
+                <h2 class="audit-section-title">States</h2>
+                <div class="audit-list" data-a11y-list="states"></div>
+              </section>
+              <section class="audit-section">
+                <h2 class="audit-section-title">ARIA attributes</h2>
+                <div class="audit-list" data-a11y-list="aria"></div>
+              </section>
+              <section class="audit-section event-section">
+                <h2 class="audit-section-title">Limited event information</h2>
+                <span class="event-summary" data-event="summary">検出可能なイベントなし</span>
+                <div class="event-list"></div>
+                <ul class="event-limitations">
+                  <li>onclickなどのHTML属性とDOM0プロパティのみ表示します。</li>
+                  <li>addEventListener()、React、Vueなどの内部リスナーは取得しません。</li>
+                </ul>
               </section>
             </div>
           </div>
@@ -1924,6 +2600,29 @@
     ui.layoutStylesGrid = panel.querySelector('[data-style-group="layout"]');
     ui.flexGridStylesGrid = panel.querySelector('[data-style-group="flex-grid"]');
     ui.typographyStylesGrid = panel.querySelector('[data-style-group="typography"]');
+    ui.editPropertySelect = panel.querySelector('[data-edit="property"]');
+    ui.editValueInput = panel.querySelector('[data-edit="value"]');
+    ui.editApplyButton = panel.querySelector('[data-action="apply-edit"]');
+    ui.editUndoButton = panel.querySelector('[data-action="undo-edit"]');
+    ui.editResetCurrentButton = panel.querySelector('[data-action="reset-current-edits"]');
+    ui.editResetAllButton = panel.querySelector('[data-action="reset-all-edits"]');
+    ui.editCopyCssButton = panel.querySelector('[data-action="copy-edit-css"]');
+    ui.editCurrentValue = panel.querySelector('[data-edit="current-value"]');
+    ui.editSummary = panel.querySelector('.edit-summary');
+    ui.editList = panel.querySelector('.edit-list');
+    ui.a11yRoleValue = panel.querySelector('[data-a11y="role"]');
+    ui.a11yRoleSourceValue = panel.querySelector('[data-a11y="role-source"]');
+    ui.a11yNameValue = panel.querySelector('[data-a11y="name"]');
+    ui.a11yNameSourceValue = panel.querySelector('[data-a11y="name-source"]');
+    ui.a11yDescriptionValue = panel.querySelector('[data-a11y="description"]');
+    ui.a11yLabelsValue = panel.querySelector('[data-a11y="labels"]');
+    ui.a11yFocusValue = panel.querySelector('[data-a11y="focus"]');
+    ui.a11yTabIndexValue = panel.querySelector('[data-a11y="tab-index"]');
+    ui.a11yHeadingValue = panel.querySelector('[data-a11y="heading"]');
+    ui.a11yStatesGrid = panel.querySelector('[data-a11y-list="states"]');
+    ui.a11yAriaGrid = panel.querySelector('[data-a11y-list="aria"]');
+    ui.eventSummaryValue = panel.querySelector('[data-event="summary"]');
+    ui.eventList = panel.querySelector('.event-list');
     ui.cssValue = panel.querySelector('[data-locator="css"] .code-box');
     ui.cssBadge = panel.querySelector('[data-locator="css"] .locator-badge');
     ui.xpathValue = panel.querySelector('[data-locator="xpath"] .code-box');
@@ -1952,6 +2651,15 @@
     ui.forwardButton.addEventListener('click', () => navigateHistory(1));
     ui.pinButton.addEventListener('click', toggleCurrentPin);
     ui.clearPinsButton.addEventListener('click', clearPins);
+    ui.editPropertySelect.addEventListener('change', () => renderEditView(ui.result));
+    ui.editApplyButton.addEventListener('click', applyEditFromUI);
+    ui.editValueInput.addEventListener('keydown', event => {
+      if (event.key === 'Enter') applyEditFromUI();
+    });
+    ui.editUndoButton.addEventListener('click', () => sendTopCommand('UNDO_EDIT'));
+    ui.editResetCurrentButton.addEventListener('click', () => sendTopCommand('RESET_CURRENT_EDITS'));
+    ui.editResetAllButton.addEventListener('click', () => sendTopCommand('RESET_ALL_EDITS'));
+    ui.editCopyCssButton.addEventListener('click', copyTemporaryEditCss);
     panel.querySelector('[data-action="copy-json"]').addEventListener('click', copyJson);
     panel.querySelector('[data-action="save-json"]').addEventListener('click', downloadJson);
     for (const button of ui.tabButtons) {
@@ -2030,6 +2738,7 @@
       cancelAnimationFrame(frameState.animationFrameId);
       frameState.animationFrameId = null;
     }
+    resetAllTemporaryEdits({ refresh: false });
     frameState.host?.remove();
     frameState.host = null;
     frameState.shadow = null;
@@ -2037,6 +2746,7 @@
     frameState.childFrameRequests.clear();
     frameState.selectionRegistry.clear();
     frameState.pinnedSelectionIds.clear();
+    frameState.editUndoStack = [];
     clearUICountdown();
     for (const key of Object.keys(ui)) {
       if (['activeTab'].includes(key)) continue;
@@ -2121,6 +2831,22 @@
     }
     if (command === 'SELECT_CHILD') {
       selectChildByIndex(message.childIndex);
+      return;
+    }
+    if (command === 'APPLY_EDIT') {
+      applyTemporaryEdit(message.property, message.value);
+      return;
+    }
+    if (command === 'UNDO_EDIT') {
+      undoTemporaryEdit();
+      return;
+    }
+    if (command === 'RESET_CURRENT_EDITS') {
+      resetCurrentTemporaryEdits();
+      return;
+    }
+    if (command === 'RESET_ALL_EDITS') {
+      resetAllTemporaryEdits();
       return;
     }
     if (command === 'RESTORE_SELECTION') {

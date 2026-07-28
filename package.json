@@ -1,6 +1,6 @@
 {
   "name": "element-inspector-extension",
-  "version": "0.10.0",
+  "version": "0.12.0",
   "private": true,
   "scripts": {
     "check": "node --check background.js && node --check inspector.js && node --check content.js",

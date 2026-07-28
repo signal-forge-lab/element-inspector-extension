@@ -182,6 +182,30 @@
         return false;
       }
 
+      if (command === 'APPLY_EDIT' || command === 'UNDO_EDIT' || command === 'RESET_CURRENT_EDITS') {
+        if (!Number.isInteger(state.selectedFrameId)) {
+          sendResponse({ ok: false, error: 'no selected frame' });
+          return false;
+        }
+        sendToFrame(tabId, state.selectedFrameId, {
+          type: MESSAGE.FRAME_COMMAND,
+          command,
+          property: message.property,
+          value: message.value
+        });
+        sendResponse({ ok: true });
+        return false;
+      }
+
+      if (command === 'RESET_ALL_EDITS') {
+        broadcastToFrames(tabId, {
+          type: MESSAGE.FRAME_COMMAND,
+          command
+        });
+        sendResponse({ ok: true });
+        return false;
+      }
+
       if (command === 'RESTORE_SELECTION') {
         if (!Number.isInteger(message.targetFrameId) || typeof message.selectionId !== 'string') {
           sendResponse({ ok: false, error: 'invalid history target' });

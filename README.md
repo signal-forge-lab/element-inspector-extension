@@ -1,10 +1,10 @@
 # Element Inspector
 
-Chromeのツールバーから起動し、ページ上のDOM要素を視覚的に選択して、Locator・階層情報・DOMスナップショットを確認・コピー・保存するChrome拡張です。
+Chromeのツールバーから起動し、ページ上のDOM要素を視覚的に選択して、Locator・階層・Styles・Accessibility・一時CSS編集・DOMスナップショットを確認、コピー、保存するChrome拡張です。
 
 ## 現在のバージョン
 
-`0.10.0`
+`0.12.0`
 
 ## 起動
 
@@ -26,7 +26,7 @@ Chromeのツールバーから起動し、ページ上のDOM要素を視覚的�
 ↓
 クリックして固定
 ↓
-固定Hierarchy・選択履歴・ピン比較・Overview / Styles / Locators / JSONを確認
+固定Hierarchy・選択履歴・ピン比較・Overview / Styles / Edit / A11y / Locators / JSONを確認
 ```
 
 ### 専用ウィンドウ
@@ -39,11 +39,13 @@ Chromeのツールバーから起動し、ページ上のDOM要素を視覚的�
 - 現在対象を最大4件までピン留めし、`Compare`で比較できます。
 - `Overview`で対象情報を確認します。
 - `Styles`でBox Modelと主要Computed Styleを確認します。
+- `Edit`でCSS・レイアウトを一時編集します。
+- `A11y`で基本Accessibility情報と限定イベント情報を確認します。
 - `Locators`でCSS Selector、XPath、JS Pathを確認・コピーします。
 - `JSON`で全結果をコピーまたはファイル保存します。
 - `prefers-reduced-motion`、`prefers-reduced-transparency`、`prefers-contrast`へ対応します。
 
-UIはプロジェクト内の`apple-design`スキルを設計基準として、即時フィードバック、1:1ドラッグ、視覚階層、抑制されたマテリアル表現を重視しています。`0.9.0`で採用したCalm Hybrid方針を`0.10.0`でも維持し、明るいニュートラル面と濃いグラファイトのデータ表示面を組み合わせています。虹色はメインアイコン、フォーカス境界、選択タブの細いアクセントだけに限定しています。
+UIはプロジェクト内の`apple-design`スキルを設計基準として、即時フィードバック、1:1ドラッグ、視覚階層、抑制されたマテリアル表現を重視しています。`0.9.0`で採用したCalm Hybrid方針を維持し、明るいニュートラル面と濃いグラファイトのデータ表示面を組み合わせています。メインアイコンは重なった四角形のグラファイトアイコンへ更新し、虹色はフォーカス境界、選択タブ、要素強調枠へ限定しています。
 
 `TOP FRAME`またはiframe情報、選択状態、閉じる操作はヘッダ右側へ集約しています。閉じるアイコンは文字ではなくSVGで描画し、ボタン中央へ配置します。
 
@@ -79,7 +81,7 @@ UIはプロジェクト内の`apple-design`スキルを設計基準として、�
 
 ウィンドウには兄弟内の現在位置と子要素数を表示します。移動するたびにDOM解析とLocator生成を再実行します。
 
-Hierarchyは`Overview`、`Styles`、`Locators`、`Compare`、`JSON`のどのビューでも利用できます。open Shadow Root直下の要素では、親移動がShadow Hostへ接続され、Shadow子とLight DOM子が混在する場合だけ子一覧へ種別を表示します。
+Hierarchyは`Overview`、`Styles`、`Edit`、`A11y`、`Locators`、`Compare`、`JSON`のどのビューでも利用できます。open Shadow Root直下の要素では、親移動がShadow Hostへ接続され、Shadow子とLight DOM子が混在する場合だけ子一覧へ種別を表示します。
 
 ## 選択履歴
 
@@ -195,6 +197,46 @@ XPathはブラウザ仕様上Shadow Root境界を越えないため、Shadow DOM
 
 表示値は固定するたびに再取得され、JSONの`computedStyles`と`boxModel`にも含まれます。
 
+## CSS・レイアウト一時編集
+
+`Edit`タブでは、固定中の要素へ次のCSSプロパティを一時適用できます。
+
+- width / height / min・max size
+- margin / paddingと各辺
+- display / position / top / right / bottom / left
+- gap / Flex alignment / Grid columns
+- color / background-color
+- font-size / line-height
+- border-radius / overflow / z-index
+
+編集は対象要素の既存`style`属性を上書きせず、Documentまたはopen Shadow Rootごとの専用スタイル層から`!important`付きで適用します。
+
+- `Undo`: 現在のフレーム内で直前の編集を戻す
+- `対象をReset`: 現在の要素だけ解除
+- `全Reset`: 全iframeを含むすべての一時編集を解除
+- `編集CSSをコピー`: 現在フレームの編集CSSをコピー
+- Inspector終了時またはページ再読み込み時に完全撤去
+- Storageへ保存しない
+
+編集結果は選択履歴を増やさず再解析され、JSONの`temporaryEdits`に編集前・指定値・適用後の値、対象数、コピー用CSSを出力します。対象識別用の一時属性はJSONから除外し、Resetまたは終了時に元の状態へ戻します。
+
+## 基本Accessibility / 限定イベント情報
+
+`A11y`タブでは、DOMから推定できる範囲で次を表示します。
+
+- 明示role / 暗黙role
+- accessible nameと推定元
+- aria-describedby / aria-descriptionなどの説明
+- label関連付け
+- focus可能性、順次フォーカス、tabindex
+- heading level
+- disabled / hidden / required / checked / expanded / pressedなどの状態
+- `aria-*`属性一覧
+
+イベント情報は、`onclick`などのHTMLイベント属性と`element.onclick`などのDOM0プロパティだけを表示します。`addEventListener()`で登録されたリスナー、React・Vueなどフレームワーク内部イベント、Chrome DevTools Protocolのイベント一覧は取得しません。
+
+取得結果はJSONの`accessibility`と`events`にも含まれます。Accessibility情報はブラウザの完全なAccessibility Treeではなく、通常DOMからの基本推定です。
+
 ## iframe対応
 
 Content Scriptは一致する全フレームへ注入されます。
@@ -216,6 +258,8 @@ Content Scriptは一致する全フレームへ注入されます。
 アウトライン描画
 DOM解析
 Locator生成
+一時CSS編集
+Accessibility / 限定イベント解析
 ```
 
 iframe間の選択結果はBackground Service Workerを介してトップフレームへ集約します。nested iframeの経路は、親子フレーム間の`postMessage`ハンドシェイクで構築します。
@@ -263,6 +307,9 @@ iframe間の選択結果はBackground Service Workerを介してトップフレ�
   "shadow": {},
   "computedStyles": {},
   "boxModel": {},
+  "temporaryEdits": {},
+  "accessibility": {},
+  "events": {},
   "frame": {},
   "svg": null,
   "ancestors": [],
@@ -285,6 +332,8 @@ iframe間の選択結果はBackground Service Workerを介してトップフレ�
 - localStorage、sessionStorage、Chrome Storageを使用しません。
 - 選択履歴を永続保存しません。
 - パネル幅・高さ、表示密度、ピン留め、比較内容を永続保存しません。
+- 一時編集、Undo履歴、Accessibility・イベント解析結果を永続保存しません。
+- 一時編集用の属性とスタイル層はResetまたはInspector終了時に撤去します。
 
 Content Scriptは`<all_urls>`へ宣言されます。これはツールバー起動後に、トップページとiframe内の対象要素を選択・解析するためです。
 
@@ -297,6 +346,9 @@ Content Scriptは`<all_urls>`へ宣言されます。これはツールバー起
 - XPathはShadow Root内部では生成できません。
 - Shadow Root内のCSS SelectorはそのShadow Root基準です。
 - iframe内LocatorはフレームDocument基準です。
+- 元のインラインCSSに`!important`が指定されている場合、一時編集が上書きできないことがあります。
+- Accessibilityは通常DOMからの基本推定で、Chromeの完全なAccessibility Treeとは一致しない場合があります。
+- イベント情報はHTML属性とDOM0プロパティに限定されます。
 
 ## 開発時の確認
 

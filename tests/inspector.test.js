@@ -393,6 +393,67 @@ test('collects computed styles and a numeric box model', () => {
   assert.deepEqual(result.boxModel.scroll, { width: 260, height: 180 });
 });
 
+test('collects basic accessibility semantics, name, description, focus, and ARIA states', () => {
+  const label = new MockElement('span', { id: 'save-label' }, { textContent: 'Save changes' });
+  const description = new MockElement('span', { id: 'save-help' }, { textContent: 'Applies the current settings' });
+  const button = new MockElement('button', {
+    'aria-labelledby': 'save-label',
+    'aria-describedby': 'save-help',
+    'aria-expanded': 'true',
+    'aria-pressed': 'false',
+    tabindex: '0'
+  });
+  const elementsById = new Map([
+    ['save-label', label],
+    ['save-help', description]
+  ]);
+  const selectorRoot = {
+    nodeType: 9,
+    querySelectorAll: () => [],
+    getElementById: id => elementsById.get(id) || null,
+    defaultView: { getComputedStyle: element => element.computedStyle }
+  };
+  button.selectorRoot = selectorRoot;
+  button.ownerDocument = selectorRoot;
+
+  const accessibility = inspector.collectAccessibility(button);
+  assert.equal(accessibility.explicitRole, null);
+  assert.equal(accessibility.implicitRole, 'button');
+  assert.equal(accessibility.role, 'button');
+  assert.deepEqual(accessibility.name, {
+    value: 'Save changes',
+    source: 'aria-labelledby',
+    approximate: false
+  });
+  assert.equal(accessibility.description.value, 'Applies the current settings');
+  assert.equal(accessibility.description.source, 'aria-describedby');
+  assert.equal(accessibility.focus.focusable, true);
+  assert.equal(accessibility.focus.sequentiallyFocusable, true);
+  assert.equal(accessibility.focus.tabIndex, 0);
+  assert.equal(accessibility.states.expanded, 'true');
+  assert.equal(accessibility.states.pressed, 'false');
+  assert.equal(accessibility.ariaAttributes['aria-labelledby'], 'save-label');
+});
+
+test('collects only inline and DOM0 event information with bounded previews', () => {
+  const button = new MockElement('button', {
+    onclick: 'saveChanges()',
+    onkeydown: 'handleKey(event)'
+  });
+  button.onclick = function clickHandler() { return 'saved'; };
+  button.onchange = function changeHandler() { return 'changed'; };
+
+  const events = inspector.collectEventInfo(button);
+  assert.equal(events.hasAny, true);
+  assert.deepEqual(events.types, ['change', 'click', 'keydown']);
+  assert.equal(events.attributes.length, 2);
+  assert.equal(events.attributes[0].type, 'click');
+  assert.match(events.properties.find(item => item.type === 'click').preview, /clickHandler/);
+  assert.match(events.properties.find(item => item.type === 'change').preview, /changeHandler/);
+  assert.equal(events.limitations.length, 2);
+  assert.match(events.limitations[0], /addEventListener/);
+});
+
 test('reports sibling position and selectable children', () => {
   const parent = new MockElement('div');
   const first = parent.appendChild(new MockElement('span', { id: 'first' }, { textContent: 'First' }));
@@ -425,8 +486,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.10.0');
-  assert.equal(pkg.version, '0.10.0');
+  assert.equal(manifest.version, '0.12.0');
+  assert.equal(pkg.version, '0.12.0');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -441,6 +502,9 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
     assert.equal(icon.readUInt32BE(16), size);
     assert.equal(icon.readUInt32BE(20), size);
   }
+  const iconSource = fs.readFileSync(path.join(root, 'assets/icons/main-icon-source.svg'), 'utf8');
+  assert.match(iconSource, /id="back-square"/);
+  assert.match(iconSource, /stroke="#dce8f6"/);
   assert.deepEqual(manifest.permissions, ['clipboardWrite']);
   assert.equal(manifest.content_scripts[0].all_frames, true);
   assert.equal(manifest.content_scripts[0].match_about_blank, true);
@@ -454,6 +518,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(background, /broadcastToFrames/);
   assert.match(background, /command === 'RESTORE_SELECTION'/);
   assert.match(background, /command === 'PIN_SELECTION' \|\| command === 'UNPIN_SELECTION'/);
+  assert.match(background, /command === 'APPLY_EDIT' \|\| command === 'UNDO_EDIT' \|\| command === 'RESET_CURRENT_EDITS'/);
+  assert.match(background, /command === 'RESET_ALL_EDITS'/);
   assert.match(background, /targetFrameId/);
   assert.match(background, /historyRestoreFailed: true/);
   assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/);
@@ -488,6 +554,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.doesNotMatch(content, /data-action="close" aria-label="閉じる">×<\/button>/);
   assert.match(content, /data-tab="locators"/);
   assert.match(content, /data-tab="styles"/);
+  assert.match(content, /data-tab="edit"/);
+  assert.match(content, /data-tab="a11y"/);
   assert.match(content, /data-tab="compare"/);
   assert.match(content, /MAX_PINNED_ENTRIES = 4/);
   assert.match(content, /function toggleCurrentPin/);
@@ -540,6 +608,19 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /data-style-group="layout"/);
   assert.match(content, /data-style-group="flex-grid"/);
   assert.match(content, /data-style-group="typography"/);
+  assert.match(content, /EDITABLE_PROPERTIES/);
+  assert.match(content, /adoptedStyleSheets/);
+  assert.match(content, /function applyTemporaryEdit/);
+  assert.match(content, /function undoTemporaryEdit/);
+  assert.match(content, /function resetCurrentTemporaryEdits/);
+  assert.match(content, /function resetAllTemporaryEdits/);
+  assert.match(content, /data-action="copy-edit-css"/);
+  assert.match(content, /既存のstyle属性は変更しません/);
+  assert.doesNotMatch(content, /selectedElement\.style\.|record\.element\.style\./);
+  assert.match(inspectorSource, /collectAccessibility/);
+  assert.match(inspectorSource, /collectEventInfo/);
+  assert.match(content, /Limited event information/);
+  assert.match(content, /addEventListener\(\)\、React\、Vue/);
   assert.match(inspectorSource, /getNavigationState/);
   assert.doesNotMatch(runtimeSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon/);
   assert.doesNotMatch(runtimeSource, /localStorage|sessionStorage|chrome\.storage/);

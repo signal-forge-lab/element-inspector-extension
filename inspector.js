@@ -6,6 +6,18 @@
   const DEFAULT_MAX_OUTER_HTML_LENGTH = 5000;
   const MAX_SELECTOR_DEPTH = 12;
   const MAX_CHILD_SUMMARIES = 80;
+  const MAX_EVENT_HANDLER_PREVIEW = 320;
+  const DOM0_EVENT_PROPERTIES = Object.freeze([
+    'onclick', 'ondblclick', 'oncontextmenu',
+    'oninput', 'onchange', 'onsubmit', 'onreset',
+    'onkeydown', 'onkeyup', 'onkeypress',
+    'onpointerdown', 'onpointerup', 'onpointermove', 'onpointerenter', 'onpointerleave',
+    'onmousedown', 'onmouseup', 'onmousemove', 'onmouseenter', 'onmouseleave',
+    'onfocus', 'onblur', 'onfocusin', 'onfocusout',
+    'ontouchstart', 'ontouchmove', 'ontouchend',
+    'ondragstart', 'ondragend', 'ondragover', 'ondrop',
+    'onwheel'
+  ]);
   const COMPUTED_STYLE_GROUPS = Object.freeze({
     layout: [
       'display', 'position', 'box-sizing', 'width', 'height',
@@ -41,6 +53,272 @@
 
   function normalizeText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function booleanAttributeState(element, attributeName, propertyName = attributeName) {
+    if (!isDomElement(element)) return false;
+    if (typeof element[propertyName] === 'boolean') return element[propertyName];
+    return element.hasAttribute?.(attributeName) || false;
+  }
+
+  function ariaValue(element, name) {
+    const value = element.getAttribute?.(`aria-${name}`);
+    return value == null || value === '' ? null : value;
+  }
+
+  function resolveReferenceById(element, id) {
+    const root = element.getRootNode?.();
+    if (typeof root?.getElementById === 'function') return root.getElementById(id);
+    if (typeof element.ownerDocument?.getElementById === 'function') {
+      return element.ownerDocument.getElementById(id);
+    }
+    if (typeof root?.querySelector === 'function') {
+      try {
+        return root.querySelector(`#${cssEscapeIdentifier(id)}`);
+      } catch {}
+    }
+    return null;
+  }
+
+  function textFromIdReferences(element, attributeName) {
+    const ids = String(element.getAttribute?.(attributeName) || '').trim().split(/\s+/).filter(Boolean);
+    return ids
+      .map(id => normalizeText(resolveReferenceById(element, id)?.textContent))
+      .filter(Boolean)
+      .join(' ');
+  }
+
+  function associatedLabelTexts(element) {
+    const labels = [];
+    for (const label of Array.from(element.labels || [])) {
+      const text = normalizeText(label?.textContent);
+      if (text && !labels.includes(text)) labels.push(text);
+    }
+
+    const closestLabel = element.closest?.('label');
+    const closestText = normalizeText(closestLabel?.textContent);
+    if (closestText && !labels.includes(closestText)) labels.push(closestText);
+
+    if (element.id) {
+      const root = element.getRootNode?.();
+      if (root?.querySelectorAll) {
+        try {
+          const selector = `label[for="${cssEscapeString(element.id)}"]`;
+          for (const label of Array.from(root.querySelectorAll(selector))) {
+            const text = normalizeText(label.textContent);
+            if (text && !labels.includes(text)) labels.push(text);
+          }
+        } catch {}
+      }
+    }
+    return labels;
+  }
+
+  function inferImplicitRole(element) {
+    if (!isDomElement(element)) return null;
+    const tagName = getTagName(element);
+    if ((tagName === 'a' || tagName === 'area') && element.hasAttribute?.('href')) return 'link';
+    if (tagName === 'button') return 'button';
+    if (tagName === 'textarea') return 'textbox';
+    if (tagName === 'select') {
+      const size = Number.parseInt(element.getAttribute?.('size') || '0', 10);
+      return booleanAttributeState(element, 'multiple') || size > 1 ? 'listbox' : 'combobox';
+    }
+    if (tagName === 'input') {
+      const type = String(element.getAttribute?.('type') || 'text').toLowerCase();
+      const roles = {
+        button: 'button', submit: 'button', reset: 'button', image: 'button',
+        checkbox: 'checkbox', radio: 'radio', range: 'slider', number: 'spinbutton',
+        search: 'searchbox', email: 'textbox', tel: 'textbox', text: 'textbox', url: 'textbox'
+      };
+      return roles[type] || null;
+    }
+    const roles = {
+      nav: 'navigation', main: 'main', aside: 'complementary',
+      header: 'banner', footer: 'contentinfo', article: 'article',
+      dialog: 'dialog', table: 'table', tr: 'row', td: 'cell',
+      ul: 'list', ol: 'list', li: 'listitem', summary: 'button',
+      progress: 'progressbar', meter: 'meter', option: 'option'
+    };
+    if (roles[tagName]) return roles[tagName];
+    if (/^h[1-6]$/.test(tagName)) return 'heading';
+    if (tagName === 'th') {
+      return String(element.getAttribute?.('scope') || '').toLowerCase() === 'row'
+        ? 'rowheader'
+        : 'columnheader';
+    }
+    if (tagName === 'img' && element.getAttribute?.('alt') !== '') return 'img';
+    return null;
+  }
+
+  function estimateAccessibleName(element, role) {
+    const labelledBy = textFromIdReferences(element, 'aria-labelledby');
+    if (labelledBy) return { value: labelledBy, source: 'aria-labelledby', approximate: false };
+
+    const ariaLabel = normalizeText(element.getAttribute?.('aria-label'));
+    if (ariaLabel) return { value: ariaLabel, source: 'aria-label', approximate: false };
+
+    const labels = associatedLabelTexts(element);
+    if (labels.length) return { value: labels.join(' '), source: 'label', approximate: false };
+
+    const tagName = getTagName(element);
+    const type = String(element.getAttribute?.('type') || '').toLowerCase();
+    if (tagName === 'img' || tagName === 'area' || (tagName === 'input' && type === 'image')) {
+      const alt = normalizeText(element.getAttribute?.('alt'));
+      if (alt) return { value: alt, source: 'alt', approximate: false };
+    }
+    if (tagName === 'input' && ['button', 'submit', 'reset'].includes(type)) {
+      const value = normalizeText(element.getAttribute?.('value') || element.value);
+      if (value) return { value, source: 'value', approximate: false };
+    }
+
+    const nameFromContentRoles = new Set([
+      'button', 'link', 'menuitem', 'option', 'tab', 'treeitem',
+      'heading', 'checkbox', 'radio', 'switch'
+    ]);
+    if (nameFromContentRoles.has(role) || ['button', 'a', 'summary', 'option'].includes(tagName)) {
+      const text = normalizeText(element.textContent);
+      if (text) return { value: text, source: 'contents', approximate: true };
+    }
+
+    const title = normalizeText(element.getAttribute?.('title'));
+    if (title) return { value: title, source: 'title', approximate: true };
+
+    const placeholder = normalizeText(element.getAttribute?.('placeholder'));
+    if (placeholder) return { value: placeholder, source: 'placeholder-fallback', approximate: true };
+
+    return { value: '', source: 'none', approximate: true };
+  }
+
+  function collectAriaAttributes(element) {
+    return Object.fromEntries(
+      Array.from(element.attributes || [])
+        .filter(attribute => attribute.name.startsWith('aria-'))
+        .map(attribute => [attribute.name, attribute.value])
+    );
+  }
+
+  function isNativeFocusable(element) {
+    const tagName = getTagName(element);
+    if (['button', 'select', 'textarea', 'iframe', 'object', 'summary'].includes(tagName)) return true;
+    if ((tagName === 'a' || tagName === 'area') && element.hasAttribute?.('href')) return true;
+    if (tagName === 'input') return String(element.getAttribute?.('type') || '').toLowerCase() !== 'hidden';
+    if (element.hasAttribute?.('contenteditable')) return element.getAttribute('contenteditable') !== 'false';
+    return false;
+  }
+
+  function collectAccessibility(element) {
+    if (!isDomElement(element)) return null;
+    const explicitRole = normalizeText(element.getAttribute?.('role')) || null;
+    const implicitRole = inferImplicitRole(element);
+    const role = explicitRole || implicitRole;
+    const name = estimateAccessibleName(element, role);
+    const describedBy = textFromIdReferences(element, 'aria-describedby');
+    const ariaDescription = normalizeText(element.getAttribute?.('aria-description'));
+    const title = normalizeText(element.getAttribute?.('title'));
+    const labels = associatedLabelTexts(element);
+    const style = getComputedStyleForElement(element);
+    const hidden =
+      element.hasAttribute?.('hidden') ||
+      ariaValue(element, 'hidden') === 'true' ||
+      readComputedStyleValue(style, 'display') === 'none' ||
+      readComputedStyleValue(style, 'visibility') === 'hidden';
+    const disabled = booleanAttributeState(element, 'disabled') || ariaValue(element, 'disabled') === 'true';
+    const tabIndexAttribute = element.getAttribute?.('tabindex');
+    const parsedTabIndex = tabIndexAttribute == null ? null : Number.parseInt(tabIndexAttribute, 10);
+    const nativeFocusable = isNativeFocusable(element);
+    const focusable = !hidden && !disabled && (nativeFocusable || Number.isInteger(parsedTabIndex));
+    const sequentiallyFocusable = focusable && (parsedTabIndex == null || parsedTabIndex >= 0);
+    const tagName = getTagName(element);
+    const headingLevel = /^h[1-6]$/.test(tagName)
+      ? Number.parseInt(tagName.slice(1), 10)
+      : Number.parseInt(ariaValue(element, 'level') || '', 10) || null;
+
+    return {
+      explicitRole,
+      implicitRole,
+      role,
+      name,
+      description: {
+        value: describedBy || ariaDescription || title || '',
+        source: describedBy ? 'aria-describedby' : ariaDescription ? 'aria-description' : title ? 'title' : 'none',
+        approximate: !describedBy && !ariaDescription
+      },
+      labels,
+      headingLevel,
+      focus: {
+        focusable,
+        sequentiallyFocusable,
+        nativeFocusable,
+        tabIndex: Number.isInteger(parsedTabIndex) ? parsedTabIndex : nativeFocusable ? 0 : null,
+        contentEditable: element.hasAttribute?.('contenteditable') && element.getAttribute('contenteditable') !== 'false'
+      },
+      states: {
+        hidden,
+        disabled,
+        required: booleanAttributeState(element, 'required') || ariaValue(element, 'required') === 'true',
+        readOnly: booleanAttributeState(element, 'readonly', 'readOnly') || ariaValue(element, 'readonly') === 'true',
+        checked: typeof element.checked === 'boolean' ? element.checked : ariaValue(element, 'checked'),
+        selected: typeof element.selected === 'boolean' ? element.selected : ariaValue(element, 'selected'),
+        expanded: ariaValue(element, 'expanded'),
+        pressed: ariaValue(element, 'pressed'),
+        invalid: ariaValue(element, 'invalid'),
+        current: ariaValue(element, 'current'),
+        busy: ariaValue(element, 'busy')
+      },
+      ariaAttributes: collectAriaAttributes(element)
+    };
+  }
+
+  function previewHandler(value) {
+    const text = typeof value === 'function' ? Function.prototype.toString.call(value) : String(value || '');
+    const normalized = text.trim();
+    return normalized.length > MAX_EVENT_HANDLER_PREVIEW
+      ? `${normalized.slice(0, MAX_EVENT_HANDLER_PREVIEW - 1)}…`
+      : normalized;
+  }
+
+  function collectEventInfo(element) {
+    if (!isDomElement(element)) return null;
+    const attributes = [];
+    for (const attribute of Array.from(element.attributes || [])) {
+      if (!/^on[a-z]+$/i.test(attribute.name)) continue;
+      attributes.push({
+        type: attribute.name.slice(2).toLowerCase(),
+        name: attribute.name.toLowerCase(),
+        preview: previewHandler(attribute.value)
+      });
+    }
+
+    const properties = [];
+    for (const property of DOM0_EVENT_PROPERTIES) {
+      let handler = null;
+      try {
+        handler = element[property];
+      } catch {}
+      if (typeof handler !== 'function') continue;
+      properties.push({
+        type: property.slice(2),
+        name: property,
+        preview: previewHandler(handler)
+      });
+    }
+
+    const types = Array.from(new Set([
+      ...attributes.map(item => item.type),
+      ...properties.map(item => item.type)
+    ])).sort();
+
+    return {
+      hasAny: types.length > 0,
+      types,
+      attributes,
+      properties,
+      limitations: [
+        'addEventListener()で登録されたリスナーは取得しません。',
+        'ReactやVueなどフレームワーク内部のイベントは取得しません。'
+      ]
+    };
   }
 
   function getComputedStyleForElement(element) {
@@ -592,6 +870,10 @@
 
       boxModel: collectBoxModel(selected),
 
+      accessibility: collectAccessibility(selected),
+
+      events: collectEventInfo(selected),
+
       svg: svg
         ? {
             attributes: attributesToObject(svg),
@@ -629,6 +911,8 @@
     collectShadowContext,
     collectComputedStyles,
     collectBoxModel,
+    collectAccessibility,
+    collectEventInfo,
     summarizeElement,
     inspectElement
   });

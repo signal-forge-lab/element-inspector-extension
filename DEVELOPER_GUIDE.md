@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.10.0`
+`0.12.0`
 
 ## 構成
 
@@ -18,6 +18,7 @@ element_inspector_extension/
 ├─ THIRD_PARTY_NOTICES.md
 ├─ skills-lock.json
 ├─ .agents/skills/apple-design/SKILL.md
+├─ assets/icons/main-icon-source.svg
 ├─ assets/icons/main-icon-{16,32,48,128}.png
 └─ tests/inspector.test.js
 ```
@@ -42,6 +43,8 @@ Top frame content.js
 ├─ pinned snapshots / comparison
 ├─ panel resize / density
 ├─ styles / box model view
+├─ temporary CSS editor
+├─ accessibility / limited events view
 ├─ export
 └─ frame result aggregation
 
@@ -59,6 +62,8 @@ inspector.js
 ├─ JS Path
 ├─ open Shadow DOM context
 ├─ computed styles / box model
+├─ accessibility estimation
+├─ limited DOM0 / inline event collection
 └─ hierarchy metadata
 ```
 
@@ -105,12 +110,13 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 - local highlight overlay
 - DOM解析
 - Document / open Shadow DOM階層移動
+- 一時CSS編集の適用・Undo・Reset
 - Backgroundとのメッセージ通信
 
 ### トップフレーム専用責務
 
 - Inspectorウィンドウ生成
-- Overview / Styles / Locators / Compare / JSONタブ
+- Overview / Styles / Edit / A11y / Locators / Compare / JSONタブ
 - 固定Hierarchy領域
 - 選択履歴の戻る・進む・直接選択
 - 最大4件のピン留め比較
@@ -119,6 +125,7 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 - 遅延固定カウント
 - Locator単体コピー
 - JSONコピー・保存
+- 編集CSSコピー
 - ヘッダドラッグ
 
 ### iframe経路
@@ -145,6 +152,8 @@ getNavigableChildren(element)
 collectShadowContext(element)
 collectComputedStyles(element)
 collectBoxModel(element)
+collectAccessibility(element)
+collectEventInfo(element)
 ```
 
 返却形式：
@@ -220,6 +229,32 @@ typography
 
 `collectBoxModel()`は`getBoundingClientRect()`とcomputed border / paddingからcontent boxを算出し、margin、border、padding、content、borderBox、scroll sizeを返します。すべて選択時点のスナップショットで、継続監視はしません。
 
+### Accessibility
+
+`collectAccessibility()`は通常DOMから次を推定します。
+
+```text
+explicitRole / implicitRole / role
+accessible name + source
+description + source
+associated labels
+focusable / sequentiallyFocusable / tabIndex
+heading level
+disabled / hidden / required / checked / expanded / pressedなど
+aria-* attributes
+```
+
+accessible nameは`aria-labelledby`、`aria-label`、関連label、alt、value、要素内容、title、placeholderの順で基本推定します。Chrome Accessibility Treeの完全再現ではありません。
+
+### 限定イベント情報
+
+`collectEventInfo()`は次だけを対象にします。
+
+- `onclick`などのHTMLイベント属性
+- `element.onclick`などのDOM0プロパティ
+
+Handler previewは最大320文字です。`addEventListener()`、フレームワーク内部イベント、DevTools Protocolのリスナー一覧は取得しません。
+
 ## UI設計
 
 プロジェクト内の`apple-design`スキルを基準にしています。
@@ -231,10 +266,11 @@ typography
 - ドラッグ中にtransitionを使用しない
 - UIの出現アニメーションは短く、入力をロックしない
 - Calm Hybridの明るい半透明Materialは外枠と操作面に限定
-- データ表示面は濃いグラファイト、虹色はメインアイコン、フォーカス境界、選択タブへ限定
+- データ表示面は濃いグラファイト、虹色はフォーカス境界、選択タブ、要素強調枠へ限定
+- メインアイコンは`main-icon-source.svg`を正本として、重なった四角形のグラファイトアイコンをサイズ別PNGへ展開
 - 基本文字は`#20262D`、補助文字は`#68727E`、成功状態は`#4F8A68`
 - Current TargetとHierarchyを固定操作領域へ集約
-- Overview / Styles / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
+- Overview / Styles / Edit / A11y / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
 - タブは囲み型セグメントではなく下線型
 - フレーム情報と選択状態をヘッダへ集約
 - 閉じるアイコンはSVGをinline-flex中央配置
@@ -321,6 +357,55 @@ comfortable
 
 どちらもメモリ内状態だけで、Inspector終了時に`compact`へ戻します。結果レイアウトはCSS Container Queriesでパネル幅に追従します。
 
+## 一時CSS編集
+
+### 状態
+
+各フレームが次をメモリ内で保持します。
+
+```text
+editRecords: Map<editId, record>
+editElementIds: WeakMap<Element, editId>
+editUndoStack: operation[]
+editStyleResources: Map<Document|ShadowRoot, resource>
+```
+
+対象Elementにはセッション固有名の一時属性を付与します。元から同名属性が存在した場合は値を退避し、Resetまたは終了時に復元します。一時属性はDOMスナップショットとJSONから除外します。
+
+### 適用層
+
+既存の`element.style`は変更しません。Documentまたはopen Shadow Rootごとに、次の優先順で専用スタイル層を作成します。
+
+```text
+Constructable CSSStyleSheet + adoptedStyleSheets
+↓ 利用不可時のみ
+一時style要素
+```
+
+許可リスト内のプロパティと`CSS.supports()`を通過した値だけを、`!important`付きで適用します。Reset時にはStylesheet、fallback style、一時属性をすべて撤去します。
+
+### コマンド
+
+```text
+APPLY_EDIT
+UNDO_EDIT
+RESET_CURRENT_EDITS
+RESET_ALL_EDITS
+```
+
+`APPLY_EDIT`、`UNDO_EDIT`、`RESET_CURRENT_EDITS`は`selectedFrameId`へ送ります。`RESET_ALL_EDITS`は全フレームへbroadcastします。編集後の再解析は`historyMode: refresh`を使用し、選択履歴を増やしません。
+
+JSONの`temporaryEdits`には次を含めます。
+
+```text
+active
+frameEditCount
+undoAvailable
+declarations: before / value / after
+currentValues
+cssText / allCssText
+```
+
 ## 強調枠
 
 各Documentに独立したclosed Shadow DOMホストを配置します。
@@ -367,6 +452,7 @@ fixed
 - 外部通信しない
 - Storage APIを使用しない
 - 対象DOMへ永続的な属性やstyleを追加しない
+- 一時編集はセッション固有属性と専用Stylesheetだけを使用し、終了時に元へ戻す
 - 結果をBackgroundへ永続保存しない
 - パネル幅・密度・履歴・ピンをStorageへ保存しない
 - iframe context handshakeはフレーム経路だけを扱う
@@ -391,8 +477,11 @@ npm test
 - 新UIのタブ・ドラッグ・Reduced Motion
 - 固定Hierarchy、履歴一覧、SVG閉じるアイコン
 - Calm Hybridトークン、サイズ別PNGアイコン、全方向下側リサイズ、密度切替
+- SVG正本から生成した重なり四角形メインアイコン
 - nested open Shadow DOM、Host境界移動、Shadow JS Path
 - Computed Style、Box Model、Stylesタブ
+- 一時CSS編集、Undo、対象Reset、全frame Reset、終了時撤去
+- 基本Accessibility推定、ARIA状態、限定DOM0 / inlineイベント情報
 - ピン留め上限、比較タブ、iframe間ピン参照保護
 - 外部通信と永続保存の不在
 
@@ -455,3 +544,25 @@ npm test
 - scroll size
 - Layout / Flex・Grid / Typographyの主要computed値
 - 選択対象を変更した際の再取得
+
+### Edit
+
+- width / heightなど許可プロパティの適用
+- 無効値と`!important`入力の拒否
+- 既存style属性が変化しないこと
+- Undoで直前値へ戻ること
+- 対象Resetで現在要素だけ解除されること
+- 全Resetでiframe / Shadow Rootを含めて解除されること
+- JSONのbefore / value / after
+- コピーCSSのDocument / Shadow Root表記
+- Inspector終了後に一時属性とStylesheetが残らないこと
+
+### Accessibility / Events
+
+- explicit / implicit role
+- aria-labelledby / aria-label / label / alt / contents由来のname
+- description、focusability、tabindex、heading level
+- disabled / hidden / required / checked / expanded / pressedなど
+- aria-*属性一覧
+- inline event属性とDOM0プロパティ
+- addEventListener / React / Vueを取得しないこと
