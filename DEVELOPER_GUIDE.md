@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.8.2`
+`0.9.0`
 
 ## 構成
 
@@ -18,7 +18,7 @@ element_inspector_extension/
 ├─ THIRD_PARTY_NOTICES.md
 ├─ skills-lock.json
 ├─ .agents/skills/apple-design/SKILL.md
-├─ assets/icons/main-icon.png
+├─ assets/icons/main-icon-{16,32,48,128}.png
 └─ tests/inspector.test.js
 ```
 
@@ -185,8 +185,9 @@ getNavigationState(element)
 - ヘッダドラッグはPointer Captureで1:1追従
 - ドラッグ中にtransitionを使用しない
 - UIの出現アニメーションは短く、入力をロックしない
-- C.Glassパレットの半透明Materialは階層表現に限定
-- パネルは濃いブルーグレー、アクセントは`#719BFF`、成功状態は`#77D6A3`
+- Calm Hybridの明るい半透明Materialは外枠と操作面に限定
+- データ表示面は濃いグラファイト、虹色はメインアイコン、フォーカス境界、選択タブへ限定
+- 基本文字は`#20262D`、補助文字は`#68727E`、成功状態は`#4F8A68`
 - Current TargetとHierarchyを固定操作領域へ集約
 - Overview / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
 - タブは囲み型セグメントではなく下線型
@@ -343,7 +344,7 @@ npm test
 - iframe context handshake
 - 新UIのタブ・ドラッグ・Reduced Motion
 - 固定Hierarchy、履歴一覧、SVG閉じるアイコン
-- C.Glassトークン、横幅リサイズ、密度切替
+- Calm Hybridトークン、サイズ別PNGアイコン、横幅リサイズ、密度切替
 - ピン留め上限、比較タブ、iframe間ピン参照保護
 - 外部通信と永続保存の不在
 

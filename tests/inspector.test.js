@@ -303,8 +303,22 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.8.2');
-  assert.equal(pkg.version, '0.8.2');
+  assert.equal(manifest.version, '0.9.0');
+  assert.equal(pkg.version, '0.9.0');
+  assert.deepEqual(manifest.icons, {
+    16: 'assets/icons/main-icon-16.png',
+    32: 'assets/icons/main-icon-32.png',
+    48: 'assets/icons/main-icon-48.png',
+    128: 'assets/icons/main-icon-128.png'
+  });
+  assert.deepEqual(manifest.action.default_icon, manifest.icons);
+  assert.deepEqual(manifest.web_accessible_resources[0].resources, ['assets/icons/main-icon-48.png']);
+  for (const size of [16, 32, 48, 128]) {
+    const icon = fs.readFileSync(path.join(root, `assets/icons/main-icon-${size}.png`));
+    assert.equal(icon.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+    assert.equal(icon.readUInt32BE(16), size);
+    assert.equal(icon.readUInt32BE(20), size);
+  }
   assert.deepEqual(manifest.permissions, ['clipboardWrite']);
   assert.equal(manifest.content_scripts[0].all_frames, true);
   assert.equal(manifest.content_scripts[0].match_about_blank, true);
@@ -321,6 +335,7 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(background, /targetFrameId/);
   assert.match(background, /historyRestoreFailed: true/);
   assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/);
+  assert.match(content, /chrome\.runtime\.getURL\('assets\/icons\/main-icon-48\.png'\)/);
   assert.match(content, /@keyframes ei-rainbow-flow-x/);
   assert.match(content, /@keyframes ei-rainbow-flow-y/);
   assert.match(content, /for \(const side of \['top', 'right', 'bottom', 'left'\]\)/);
@@ -372,8 +387,9 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /function beginPanelResize/);
   assert.match(content, /function resizePanel/);
   assert.match(content, /container: inspector \/ inline-size/);
-  assert.match(content, /rgba\(113,155,255/);
-  assert.match(content, /#77d6a3/);
+  assert.match(content, /--ei-spectrum:/);
+  assert.match(content, /#20262d/);
+  assert.match(content, /#4f8a68/);
   assert.match(content, /Local only · no storage/);
   assert.match(content, /UNIQUE · \$\{scope\}/);
   assert.match(content, /countdownDeadline/);
