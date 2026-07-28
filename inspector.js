@@ -6,6 +6,25 @@
   const DEFAULT_MAX_OUTER_HTML_LENGTH = 5000;
   const MAX_SELECTOR_DEPTH = 12;
   const MAX_CHILD_SUMMARIES = 80;
+  const COMPUTED_STYLE_GROUPS = Object.freeze({
+    layout: [
+      'display', 'position', 'box-sizing', 'width', 'height',
+      'min-width', 'max-width', 'min-height', 'max-height',
+      'overflow', 'overflow-x', 'overflow-y', 'z-index',
+      'visibility', 'opacity'
+    ],
+    flexGrid: [
+      'flex-direction', 'flex-wrap', 'justify-content', 'align-items',
+      'align-content', 'gap', 'row-gap', 'column-gap',
+      'grid-template-columns', 'grid-template-rows', 'grid-auto-flow',
+      'place-items'
+    ],
+    typography: [
+      'font-family', 'font-size', 'font-weight', 'font-style',
+      'line-height', 'letter-spacing', 'text-align', 'text-decoration-line',
+      'text-transform', 'white-space', 'word-break', 'color'
+    ]
+  });
 
   function isDomElement(value) {
     return typeof Element !== 'undefined' && value instanceof Element;
@@ -31,6 +50,81 @@
     return { display: '', visibility: '', position: '' };
   }
 
+  function cssPropertyToCamelCase(property) {
+    return String(property).replace(/-([a-z])/g, (_match, letter) => letter.toUpperCase());
+  }
+
+  function readComputedStyleValue(style, property) {
+    if (!style) return '';
+    const direct = style.getPropertyValue?.(property);
+    if (typeof direct === 'string' && direct.trim()) return direct.trim();
+    const camelCase = cssPropertyToCamelCase(property);
+    const value = style[camelCase] ?? style[property];
+    return value == null ? '' : String(value).trim();
+  }
+
+  function roundMetric(value) {
+    return Math.round(Number(value || 0) * 100) / 100;
+  }
+
+  function pixelValue(value) {
+    const parsed = Number.parseFloat(String(value || ''));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function collectSideValues(style, prefix, suffix = '') {
+    const result = {};
+    for (const side of ['top', 'right', 'bottom', 'left']) {
+      result[side] = readComputedStyleValue(style, `${prefix}-${side}${suffix}`) || '0px';
+    }
+    return result;
+  }
+
+  function collectComputedStyles(element) {
+    const style = getComputedStyleForElement(element);
+    const result = {};
+    for (const [group, properties] of Object.entries(COMPUTED_STYLE_GROUPS)) {
+      result[group] = Object.fromEntries(properties.map(property => [
+        property,
+        readComputedStyleValue(style, property) || '—'
+      ]));
+    }
+    return result;
+  }
+
+  function collectBoxModel(element) {
+    const style = getComputedStyleForElement(element);
+    const rect = element.getBoundingClientRect();
+    const margin = collectSideValues(style, 'margin');
+    const border = collectSideValues(style, 'border', '-width');
+    const padding = collectSideValues(style, 'padding');
+    const horizontalInset =
+      pixelValue(border.left) + pixelValue(border.right) +
+      pixelValue(padding.left) + pixelValue(padding.right);
+    const verticalInset =
+      pixelValue(border.top) + pixelValue(border.bottom) +
+      pixelValue(padding.top) + pixelValue(padding.bottom);
+
+    return {
+      boxSizing: readComputedStyleValue(style, 'box-sizing') || 'content-box',
+      margin,
+      border,
+      padding,
+      content: {
+        width: roundMetric(Math.max(0, rect.width - horizontalInset)),
+        height: roundMetric(Math.max(0, rect.height - verticalInset))
+      },
+      borderBox: {
+        width: roundMetric(rect.width),
+        height: roundMetric(rect.height)
+      },
+      scroll: {
+        width: Number.isFinite(element.scrollWidth) ? element.scrollWidth : null,
+        height: Number.isFinite(element.scrollHeight) ? element.scrollHeight : null
+      }
+    };
+  }
+
   function getRoundedRect(element) {
     const rect = element.getBoundingClientRect();
     return {
@@ -45,8 +139,75 @@
     return element.localName || element.tagName?.toLowerCase() || 'element';
   }
 
+  function isOpenShadowRoot(root) {
+    return Boolean(root && root.nodeType === 11 && root.host && root.mode !== 'closed');
+  }
+
+  function getComposedParent(element) {
+    if (!isDomElement(element)) return null;
+    if (element.parentElement) return element.parentElement;
+    const root = element.getRootNode?.();
+    return isOpenShadowRoot(root) && isDomElement(root.host) ? root.host : null;
+  }
+
+  function getSiblingElements(element) {
+    if (!isDomElement(element)) return [];
+    if (element.parentElement) return Array.from(element.parentElement.children || []).filter(isDomElement);
+    const root = element.getRootNode?.();
+    if (isOpenShadowRoot(root)) return Array.from(root.children || []).filter(isDomElement);
+    return [element];
+  }
+
+  function getNavigableChildren(element) {
+    if (!isDomElement(element)) return [];
+    const children = [];
+    const shadowRoot = element.shadowRoot;
+    if (isOpenShadowRoot(shadowRoot)) {
+      for (const child of Array.from(shadowRoot.children || []).filter(isDomElement)) {
+        children.push({ element: child, treeScope: 'shadow' });
+      }
+    }
+    for (const child of Array.from(element.children || []).filter(isDomElement)) {
+      children.push({ element: child, treeScope: 'light' });
+    }
+    return children;
+  }
+
+  function collectShadowContext(element) {
+    if (!isDomElement(element)) return { inside: false, depth: 0, hosts: [] };
+    const hosts = [];
+    let current = element;
+    let root = current.getRootNode?.();
+
+    while (isOpenShadowRoot(root)) {
+      const host = root.host;
+      const locator = generateCssLocator(host);
+      hosts.unshift({
+        tagName: getTagName(host),
+        attributes: attributesToObject(host),
+        cssSelector: locator.value,
+        label: summarizeElement(host)?.label || `<${getTagName(host)}>`
+      });
+      current = host;
+      root = current.getRootNode?.();
+    }
+
+    return {
+      inside: hosts.length > 0,
+      depth: hosts.length,
+      hosts
+    };
+  }
+
   function findControlElement(selected) {
-    return selected.closest?.(CONTROL_SELECTOR) || selected;
+    let current = selected;
+    while (isDomElement(current)) {
+      const control = current.closest?.(CONTROL_SELECTOR);
+      if (control) return control;
+      const root = current.getRootNode?.();
+      current = isOpenShadowRoot(root) ? root.host : null;
+    }
+    return selected;
   }
 
   function findFirstSvg(control) {
@@ -68,7 +229,7 @@
         position: style.position,
         rect: getRoundedRect(current)
       });
-      current = current.parentElement;
+      current = getComposedParent(current);
     }
 
     return ancestors;
@@ -297,10 +458,35 @@
   function generateJsPath(element, cssLocator = generateCssLocator(element)) {
     if (!cssLocator?.value) return { value: null, scope: cssLocator?.scope || 'unknown' };
     if (cssLocator.scope === 'shadow-root') {
+      const segments = [];
+      let current = element;
+      let root = current.getRootNode?.();
+
+      while (isOpenShadowRoot(root)) {
+        const currentLocator = generateCssLocator(current);
+        if (!currentLocator.value) {
+          return { value: null, scope: 'shadow-chain', unsupported: true };
+        }
+        segments.unshift(currentLocator.value);
+        current = root.host;
+        root = current.getRootNode?.();
+      }
+
+      const hostLocator = generateCssLocator(current);
+      if (!hostLocator.value) {
+        return { value: null, scope: 'shadow-chain', unsupported: true };
+      }
+      segments.unshift(hostLocator.value);
+
+      let value = `document.querySelector(${JSON.stringify(segments[0])})`;
+      for (const selector of segments.slice(1)) {
+        value += `?.shadowRoot?.querySelector(${JSON.stringify(selector)})`;
+      }
       return {
-        value: null,
-        scope: 'shadow-root',
-        unsupported: true
+        value,
+        scope: 'shadow-chain',
+        shadowDepth: segments.length - 1,
+        segments
       };
     }
     return {
@@ -339,22 +525,25 @@
       };
     }
 
-    const parent = element.parentElement;
-    const siblings = parent
-      ? Array.from(parent.children || []).filter(isDomElement)
-      : [element];
-    const children = Array.from(element.children || []).filter(isDomElement);
+    const parent = getComposedParent(element);
+    const siblings = getSiblingElements(element);
+    const children = getNavigableChildren(element);
     const siblingIndex = Math.max(0, siblings.indexOf(element));
+    const crossesShadowBoundary = !element.parentElement && Boolean(parent);
 
     return {
       hasParent: Boolean(parent),
-      hasPreviousSibling: Boolean(element.previousElementSibling),
-      hasNextSibling: Boolean(element.nextElementSibling),
+      parentCrossesShadowBoundary: crossesShadowBoundary,
+      hasPreviousSibling: siblingIndex > 0,
+      hasNextSibling: siblingIndex >= 0 && siblingIndex < siblings.length - 1,
       childCount: children.length,
       siblingIndex,
       siblingCount: siblings.length,
       childrenTruncated: children.length > MAX_CHILD_SUMMARIES,
-      children: children.slice(0, MAX_CHILD_SUMMARIES).map((child, index) => summarizeElement(child, index))
+      children: children.slice(0, MAX_CHILD_SUMMARIES).map((item, index) => ({
+        ...summarizeElement(item.element, index),
+        treeScope: item.treeScope
+      }))
     };
   }
 
@@ -397,6 +586,12 @@
 
       navigation: getNavigationState(selected),
 
+      shadow: collectShadowContext(selected),
+
+      computedStyles: collectComputedStyles(selected),
+
+      boxModel: collectBoxModel(selected),
+
       svg: svg
         ? {
             attributes: attributesToObject(svg),
@@ -427,7 +622,13 @@
     generateCssLocator,
     generateXPathLocator,
     generateJsPath,
+    getComposedParent,
+    getSiblingElements,
+    getNavigableChildren,
     getNavigationState,
+    collectShadowContext,
+    collectComputedStyles,
+    collectBoxModel,
     summarizeElement,
     inspectElement
   });

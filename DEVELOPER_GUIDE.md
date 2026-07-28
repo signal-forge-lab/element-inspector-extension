@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.9.0`
+`0.10.0`
 
 ## 構成
 
@@ -41,6 +41,7 @@ Top frame content.js
 ├─ selection history
 ├─ pinned snapshots / comparison
 ├─ panel resize / density
+├─ styles / box model view
 ├─ export
 └─ frame result aggregation
 
@@ -56,6 +57,8 @@ inspector.js
 ├─ CSS Selector
 ├─ XPath
 ├─ JS Path
+├─ open Shadow DOM context
+├─ computed styles / box model
 └─ hierarchy metadata
 ```
 
@@ -101,17 +104,17 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 - クリック固定
 - local highlight overlay
 - DOM解析
-- 階層移動
+- Document / open Shadow DOM階層移動
 - Backgroundとのメッセージ通信
 
 ### トップフレーム専用責務
 
 - Inspectorウィンドウ生成
-- Overview / Locators / JSONタブ
+- Overview / Styles / Locators / Compare / JSONタブ
 - 固定Hierarchy領域
 - 選択履歴の戻る・進む・直接選択
 - 最大4件のピン留め比較
-- パネル横幅リサイズ
+- パネル横幅・高さ・斜めリサイズ
 - Compact / Comfortable密度切替
 - 遅延固定カウント
 - Locator単体コピー
@@ -136,6 +139,12 @@ Chrome APIに依存しないDOM解析モジュールです。ブラウザでは`
 generateCssLocator(element)
 generateXPathLocator(element)
 generateJsPath(element, cssLocator)
+getComposedParent(element)
+getSiblingElements(element)
+getNavigableChildren(element)
+collectShadowContext(element)
+collectComputedStyles(element)
+collectBoxModel(element)
 ```
 
 返却形式：
@@ -159,7 +168,15 @@ Document内で`document.evaluate()`を使って一致件数を検証します。
 
 ### JS Path
 
-CSS Selectorから`document.querySelector()`式を生成します。iframe内ではそのiframe Document基準です。
+Document内ではCSS Selectorから`document.querySelector()`式を生成します。open Shadow DOM内では、外側のHostから対象までを次の形式で連結します。
+
+```js
+document.querySelector('#outer-host')
+  ?.shadowRoot?.querySelector('#inner-host')
+  ?.shadowRoot?.querySelector('#target')
+```
+
+iframe内ではそのiframe Document基準です。
 
 ### 階層情報
 
@@ -174,6 +191,34 @@ getNavigationState(element)
 - 兄弟内indexと総数
 - 子要素数
 - 最大80件の子要素summary
+- Shadow Root直下からHostへの親移動
+- Shadow子 / Light DOM子の`treeScope`
+
+### open Shadow DOM
+
+Document capture listenerで受けたイベントの`composedPath()`から実際の内部Elementを取得します。追加のMutationObserverやページスクリプト注入は行いません。
+
+```text
+open Shadow Root内のElement
+↓ getRootNode()
+ShadowRoot.host
+↓ 必要なだけ反復
+Document内の外側Host
+```
+
+CSS Selectorは各Selector Root内の相対値です。`collectShadowContext()`は外側から内側の順でHost summaryとSelectorを保持します。closed Shadow Rootは`composedPath()`から内部要素が公開されないため対象外です。
+
+### Computed Style / Box Model
+
+`collectComputedStyles()`は主要プロパティを次の3グループへ整理します。
+
+```text
+layout
+flexGrid
+typography
+```
+
+`collectBoxModel()`は`getBoundingClientRect()`とcomputed border / paddingからcontent boxを算出し、margin、border、padding、content、borderBox、scroll sizeを返します。すべて選択時点のスナップショットで、継続監視はしません。
 
 ## UI設計
 
@@ -189,7 +234,7 @@ getNavigationState(element)
 - データ表示面は濃いグラファイト、虹色はメインアイコン、フォーカス境界、選択タブへ限定
 - 基本文字は`#20262D`、補助文字は`#68727E`、成功状態は`#4F8A68`
 - Current TargetとHierarchyを固定操作領域へ集約
-- Overview / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
+- Overview / Styles / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
 - タブは囲み型セグメントではなく下線型
 - フレーム情報と選択状態をヘッダへ集約
 - 閉じるアイコンはSVGをinline-flex中央配置
@@ -256,15 +301,16 @@ Target frame
 
 ## パネルリサイズと表示密度
 
-左右のリサイズハンドルはPointer Captureで横幅を1:1追従します。
+左右、下端、左下・右下のリサイズハンドルはPointer Captureでサイズを1:1追従します。上端・上角はヘッダドラッグと競合するため設けません。
 
 ```text
 最小幅: min(360px, viewport - 16px)
+最小高さ: min(440px, viewport - 16px)
 初期幅: 468px
-最大幅: viewport - 16px
+最大幅・高さ: viewport内
 ```
 
-リサイズ開始時に`right: auto`へ切り替え、現在の`left`と`width`を固定値へ変換します。左ハンドルは右端を、右ハンドルは左端を基準に幅を計算します。
+リサイズ開始時に`right: auto`へ切り替え、現在の`left`、`top`、`width`、必要な場合は`height`を固定値へ変換します。左ハンドルは右端を、右ハンドルは左端を基準に幅を計算します。下端は上端を固定し、角ハンドルは辺より高い`z-index`で判定を優先します。
 
 密度は`panel.dataset.density`で切り替えます。
 
@@ -344,7 +390,9 @@ npm test
 - iframe context handshake
 - 新UIのタブ・ドラッグ・Reduced Motion
 - 固定Hierarchy、履歴一覧、SVG閉じるアイコン
-- Calm Hybridトークン、サイズ別PNGアイコン、横幅リサイズ、密度切替
+- Calm Hybridトークン、サイズ別PNGアイコン、全方向下側リサイズ、密度切替
+- nested open Shadow DOM、Host境界移動、Shadow JS Path
+- Computed Style、Box Model、Stylesタブ
 - ピン留め上限、比較タブ、iframe間ピン参照保護
 - 外部通信と永続保存の不在
 
@@ -357,6 +405,7 @@ npm test
 - 重複class
 - SVG
 - 属性値に引用符を含む要素
+- open / nested Shadow Root内のCSS SelectorとJS Path
 
 ### ナビゲーション
 
@@ -368,6 +417,8 @@ npm test
 - 戻ったあとに新規選択して進む履歴が破棄されること
 - iframe削除後の履歴復元エラー
 - 対象削除時の復帰
+- Shadow Root直下からHostへの親移動
+- Shadow子とLight DOM子が混在するHost
 
 ### iframe
 
@@ -382,6 +433,9 @@ npm test
 - ヘッダドラッグ
 - SVG閉じるアイコンの中央揃え
 - 左右端からの横幅リサイズ
+- 下端からの高さリサイズ
+- 左下・右下からの斜めリサイズ
+- 440px最小高さと小さいビューポートでの補正
 - Compact / Comfortable切替
 - 360px付近と620px以上でのレイアウト変化
 - Compareの1列・2列表示
@@ -393,3 +447,11 @@ npm test
 - Reduced Motion
 - Reduced Transparency
 - High Contrast
+
+### Styles
+
+- margin / border / padding / contentの値
+- border-box / content-box
+- scroll size
+- Layout / Flex・Grid / Typographyの主要computed値
+- 選択対象を変更した際の再取得

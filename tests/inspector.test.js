@@ -18,6 +18,9 @@ class MockElement {
     this.rect = options.rect || { top: 0, left: 0, width: 0, height: 0 };
     this.computedStyle = options.computedStyle || { display: 'block', visibility: 'visible', position: 'static' };
     this.isConnected = options.isConnected !== false;
+    this.shadowRoot = null;
+    this.scrollWidth = options.scrollWidth ?? this.rect.width;
+    this.scrollHeight = options.scrollHeight ?? this.rect.height;
     this.ownerDocument = {
       defaultView: {
         getComputedStyle: element => element.computedStyle
@@ -122,6 +125,35 @@ class MockElement {
 
   getRootNode() {
     return this.selectorRoot || this.ownerDocument;
+  }
+}
+
+class MockShadowRoot {
+  constructor(host) {
+    this.nodeType = 11;
+    this.host = host;
+    this.mode = 'open';
+    this.children = [];
+    host.shadowRoot = this;
+  }
+
+  appendChild(child) {
+    child.parentElement = null;
+    child.selectorRoot = this;
+    child.ownerDocument = this.host.ownerDocument;
+    this.children.push(child);
+    return child;
+  }
+
+  querySelectorAll(selector) {
+    const matches = [];
+    const visit = node => {
+      if (selector.startsWith('#') && node.id === selector.slice(1)) matches.push(node);
+      if (selector === node.localName) matches.push(node);
+      for (const child of node.children || []) visit(child);
+    };
+    for (const child of this.children) visit(child);
+    return matches;
   }
 }
 
@@ -255,20 +287,110 @@ test('marks a duplicated CSS selector as non-unique', () => {
   assert.equal(css.unique, false);
 });
 
-test('does not emit a misleading JS path inside a Shadow Root', () => {
-  const button = new MockElement('button', { id: 'shadow-save' });
-  const shadowRoot = {
-    nodeType: 11,
-    querySelectorAll: selector => selector === '#shadow-save' ? [button] : []
+test('generates an executable JS path through an open Shadow Root', () => {
+  const host = new MockElement('section', { id: 'settings-host' });
+  const documentRoot = {
+    nodeType: 9,
+    querySelectorAll: selector => selector === '#settings-host' ? [host] : [],
+    defaultView: { getComputedStyle: element => element.computedStyle }
   };
-  button.selectorRoot = shadowRoot;
+  host.selectorRoot = documentRoot;
+  host.ownerDocument = documentRoot;
+  const shadowRoot = new MockShadowRoot(host);
+  const button = shadowRoot.appendChild(new MockElement('button', { id: 'shadow-save' }));
 
   const css = inspector.generateCssLocator(button);
   const jsPath = inspector.generateJsPath(button, css);
 
   assert.equal(css.scope, 'shadow-root');
-  assert.equal(jsPath.value, null);
-  assert.equal(jsPath.unsupported, true);
+  assert.equal(jsPath.scope, 'shadow-chain');
+  assert.equal(jsPath.shadowDepth, 1);
+  assert.equal(
+    jsPath.value,
+    'document.querySelector("#settings-host")?.shadowRoot?.querySelector("#shadow-save")'
+  );
+  assert.deepEqual(jsPath.segments, ['#settings-host', '#shadow-save']);
+});
+
+test('supports nested open Shadow Roots and hierarchy traversal across hosts', () => {
+  const outerHost = new MockElement('section', { id: 'outer-host' });
+  const documentRoot = {
+    nodeType: 9,
+    querySelectorAll: selector => selector === '#outer-host' ? [outerHost] : [],
+    defaultView: { getComputedStyle: element => element.computedStyle }
+  };
+  outerHost.selectorRoot = documentRoot;
+  outerHost.ownerDocument = documentRoot;
+  const outerRoot = new MockShadowRoot(outerHost);
+  const innerHost = outerRoot.appendChild(new MockElement('div', { id: 'inner-host' }));
+  const innerRoot = new MockShadowRoot(innerHost);
+  const target = innerRoot.appendChild(new MockElement('button', { id: 'nested-target' }));
+
+  const jsPath = inspector.generateJsPath(target);
+  assert.equal(jsPath.shadowDepth, 2);
+  assert.equal(
+    jsPath.value,
+    'document.querySelector("#outer-host")?.shadowRoot?.querySelector("#inner-host")?.shadowRoot?.querySelector("#nested-target")'
+  );
+
+  const targetNavigation = inspector.getNavigationState(target);
+  assert.equal(targetNavigation.hasParent, true);
+  assert.equal(targetNavigation.parentCrossesShadowBoundary, true);
+  assert.equal(inspector.getComposedParent(target), innerHost);
+
+  const hostNavigation = inspector.getNavigationState(innerHost);
+  assert.equal(hostNavigation.childCount, 1);
+  assert.equal(hostNavigation.children[0].treeScope, 'shadow');
+
+  const shadow = inspector.collectShadowContext(target);
+  assert.equal(shadow.inside, true);
+  assert.equal(shadow.depth, 2);
+  assert.deepEqual(shadow.hosts.map(item => item.tagName), ['section', 'div']);
+});
+
+test('collects computed styles and a numeric box model', () => {
+  const element = new MockElement('div', {}, {
+    rect: { top: 10, left: 20, width: 200, height: 100 },
+    scrollWidth: 260,
+    scrollHeight: 180,
+    computedStyle: {
+      display: 'flex',
+      position: 'relative',
+      boxSizing: 'border-box',
+      width: '200px',
+      height: '100px',
+      paddingTop: '10px',
+      paddingRight: '12px',
+      paddingBottom: '10px',
+      paddingLeft: '12px',
+      borderTopWidth: '2px',
+      borderRightWidth: '2px',
+      borderBottomWidth: '2px',
+      borderLeftWidth: '2px',
+      marginTop: '4px',
+      marginRight: '5px',
+      marginBottom: '6px',
+      marginLeft: '7px',
+      justifyContent: 'space-between',
+      alignItems: 'center',
+      fontFamily: 'system-ui',
+      fontSize: '14px',
+      fontWeight: '600',
+      lineHeight: '20px',
+      color: 'rgb(32, 38, 45)'
+    }
+  });
+
+  const result = inspector.inspectElement(element);
+  assert.equal(result.computedStyles.layout.display, 'flex');
+  assert.equal(result.computedStyles.flexGrid['justify-content'], 'space-between');
+  assert.equal(result.computedStyles.typography['font-size'], '14px');
+  assert.deepEqual(result.boxModel.margin, {
+    top: '4px', right: '5px', bottom: '6px', left: '7px'
+  });
+  assert.deepEqual(result.boxModel.content, { width: 172, height: 76 });
+  assert.deepEqual(result.boxModel.borderBox, { width: 200, height: 100 });
+  assert.deepEqual(result.boxModel.scroll, { width: 260, height: 180 });
 });
 
 test('reports sibling position and selectable children', () => {
@@ -303,8 +425,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.9.0');
-  assert.equal(pkg.version, '0.9.0');
+  assert.equal(manifest.version, '0.10.0');
+  assert.equal(pkg.version, '0.10.0');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -365,6 +487,7 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /<svg viewBox="0 0 16 16"[^>]*>[\s\S]*M4 4l8 8M12 4l-8 8/);
   assert.doesNotMatch(content, /data-action="close" aria-label="閉じる">×<\/button>/);
   assert.match(content, /data-tab="locators"/);
+  assert.match(content, /data-tab="styles"/);
   assert.match(content, /data-tab="compare"/);
   assert.match(content, /MAX_PINNED_ENTRIES = 4/);
   assert.match(content, /function toggleCurrentPin/);
@@ -384,6 +507,11 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /function toggleDensity/);
   assert.match(content, /data-resize-side="left"/);
   assert.match(content, /data-resize-side="right"/);
+  assert.match(content, /data-resize-direction="bottom"/);
+  assert.match(content, /data-resize-direction="bottom-left"/);
+  assert.match(content, /data-resize-direction="bottom-right"/);
+  assert.match(content, /MIN_PANEL_HEIGHT = 440/);
+  assert.match(content, /function clampPanelHeight/);
   assert.match(content, /function beginPanelResize/);
   assert.match(content, /function resizePanel/);
   assert.match(content, /container: inspector \/ inline-size/);
@@ -404,6 +532,14 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(inspectorSource, /generateCssLocator/);
   assert.match(inspectorSource, /generateXPathLocator/);
   assert.match(inspectorSource, /generateJsPath/);
+  assert.match(inspectorSource, /shadowRoot\?\.querySelector/);
+  assert.match(inspectorSource, /collectShadowContext/);
+  assert.match(inspectorSource, /collectComputedStyles/);
+  assert.match(inspectorSource, /collectBoxModel/);
+  assert.match(content, /Box model/);
+  assert.match(content, /data-style-group="layout"/);
+  assert.match(content, /data-style-group="flex-grid"/);
+  assert.match(content, /data-style-group="typography"/);
   assert.match(inspectorSource, /getNavigationState/);
   assert.doesNotMatch(runtimeSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon/);
   assert.doesNotMatch(runtimeSource, /localStorage|sessionStorage|chrome\.storage/);

@@ -1,13 +1,14 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.9.0';
+  const EXTENSION_VERSION = '0.10.0';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
   const MAX_HISTORY_ENTRIES = 100;
   const MAX_PINNED_ENTRIES = 4;
   const MIN_PANEL_WIDTH = 360;
+  const MIN_PANEL_HEIGHT = 440;
   const DEFAULT_PANEL_WIDTH = 468;
 
   const MESSAGE = Object.freeze({
@@ -80,6 +81,17 @@
     frameTypeValue: null,
     frameUrlValue: null,
     frameDepthValue: null,
+    shadowDepthValue: null,
+    shadowHostsValue: null,
+    boxMarginValue: null,
+    boxBorderValue: null,
+    boxPaddingValue: null,
+    boxContentValue: null,
+    boxBorderBoxValue: null,
+    boxScrollValue: null,
+    layoutStylesGrid: null,
+    flexGridStylesGrid: null,
+    typographyStylesGrid: null,
     cssValue: null,
     cssBadge: null,
     xpathValue: null,
@@ -311,7 +323,8 @@
     result.locators.context = {
       frameRelative: !frameState.isTopFrame,
       frameId: frameState.frameId,
-      framePath: frameState.frameContext.path
+      framePath: frameState.frameContext.path,
+      shadowDepth: result.shadow?.depth || 0
     };
     emitFrameEvent({
       kind: 'selected',
@@ -351,12 +364,15 @@
       return;
     }
 
+    const siblings = globalThis.ElementInspector?.getSiblingElements?.(selected) || [];
+    const siblingIndex = siblings.indexOf(selected);
+    const children = globalThis.ElementInspector?.getNavigableChildren?.(selected) || [];
     const targetByDirection = {
-      parent: selected.parentElement,
-      previous: selected.previousElementSibling,
-      next: selected.nextElementSibling,
-      firstChild: selected.firstElementChild,
-      lastChild: selected.lastElementChild
+      parent: globalThis.ElementInspector?.getComposedParent?.(selected) || selected.parentElement,
+      previous: siblingIndex > 0 ? siblings[siblingIndex - 1] : null,
+      next: siblingIndex >= 0 && siblingIndex < siblings.length - 1 ? siblings[siblingIndex + 1] : null,
+      firstChild: children[0]?.element || selected.firstElementChild,
+      lastChild: children[children.length - 1]?.element || selected.lastElementChild
     };
     const target = targetByDirection[direction] || null;
     if (!target) {
@@ -372,7 +388,8 @@
 
   function selectChildByIndex(index) {
     const selected = frameState.selectedElement;
-    const child = selected?.children?.[index];
+    const children = globalThis.ElementInspector?.getNavigableChildren?.(selected) || [];
+    const child = children[index]?.element || selected?.children?.[index];
     if (!isElement(child)) {
       emitFrameEvent({
         kind: 'status',
@@ -543,8 +560,12 @@
   }
 
   function locatorBadge(locator, frameRelative) {
-    if (!locator?.value) return 'UNAVAILABLE';
-    const scope = frameRelative ? 'FRAME' : 'DOCUMENT';
+    const scopes = [frameRelative ? 'FRAME' : 'DOCUMENT'];
+    if (locator?.scope === 'shadow-root' || locator?.scope === 'shadow-chain') {
+      scopes.push(locator.shadowDepth ? `SHADOW ${locator.shadowDepth}` : 'SHADOW');
+    }
+    const scope = scopes.join(' · ');
+    if (!locator?.value) return locator?.unsupported ? `UNSUPPORTED · ${scope}` : `UNAVAILABLE · ${scope}`;
     if (locator.unique) return `UNIQUE · ${scope}`;
     if (Number.isInteger(locator.matchCount)) return `${locator.matchCount} MATCHES · ${scope}`;
     return `${locator.scope?.toUpperCase() || 'READY'} · ${scope}`;
@@ -585,6 +606,55 @@
     ui.historySelect.disabled = ui.pendingHistoryIndex !== null;
     ui.historySelect.value = String(Math.max(0, ui.historyIndex));
     ui.historySelect.setAttribute('aria-label', `選択履歴 ${ui.historyIndex + 1} / ${ui.history.length}`);
+  }
+
+  function boxSideSummary(sides) {
+    if (!sides) return '—';
+    return `T ${sides.top || '0px'} · R ${sides.right || '0px'} · B ${sides.bottom || '0px'} · L ${sides.left || '0px'}`;
+  }
+
+  function renderStylePropertyGrid(container, values) {
+    if (!container) return;
+    container.replaceChildren();
+    for (const [property, value] of Object.entries(values || {})) {
+      const item = document.createElement('div');
+      item.className = 'style-property';
+      const label = document.createElement('span');
+      label.className = 'style-property-name';
+      label.textContent = property;
+      const valueNode = document.createElement('code');
+      valueNode.className = 'style-property-value';
+      valueNode.textContent = value || '—';
+      item.append(label, valueNode);
+      container.appendChild(item);
+    }
+  }
+
+  function renderStylesView(result) {
+    const boxModel = result?.boxModel;
+    const computed = result?.computedStyles;
+    if (ui.boxMarginValue) ui.boxMarginValue.textContent = boxSideSummary(boxModel?.margin);
+    if (ui.boxBorderValue) ui.boxBorderValue.textContent = boxSideSummary(boxModel?.border);
+    if (ui.boxPaddingValue) ui.boxPaddingValue.textContent = boxSideSummary(boxModel?.padding);
+    if (ui.boxContentValue) {
+      ui.boxContentValue.textContent = boxModel
+        ? `${boxModel.content.width} × ${boxModel.content.height}`
+        : '—';
+    }
+    if (ui.boxBorderBoxValue) {
+      ui.boxBorderBoxValue.textContent = boxModel
+        ? `${boxModel.borderBox.width} × ${boxModel.borderBox.height} · ${boxModel.boxSizing}`
+        : '—';
+    }
+    if (ui.boxScrollValue) {
+      const scroll = boxModel?.scroll;
+      ui.boxScrollValue.textContent = scroll && scroll.width != null && scroll.height != null
+        ? `${scroll.width} × ${scroll.height}`
+        : '—';
+    }
+    renderStylePropertyGrid(ui.layoutStylesGrid, computed?.layout);
+    renderStylePropertyGrid(ui.flexGridStylesGrid, computed?.flexGrid);
+    renderStylePropertyGrid(ui.typographyStylesGrid, computed?.typography);
   }
 
   function isCurrentPinned() {
@@ -701,6 +771,9 @@
     renderPinnedComparisons();
 
     ui.parentButton.disabled = !result?.navigation?.hasParent;
+    ui.parentButton.title = result?.navigation?.parentCrossesShadowBoundary
+      ? 'Shadow Hostへ移動'
+      : '親要素へ移動';
     ui.previousButton.disabled = !result?.navigation?.hasPreviousSibling;
     ui.nextButton.disabled = !result?.navigation?.hasNextSibling;
     ui.firstChildButton.disabled = !result?.navigation?.childCount;
@@ -708,8 +781,10 @@
 
     ui.childSelect.disabled = !result?.navigation?.childCount;
     ui.childSelect.replaceChildren(new Option('子要素を選択…', ''));
+    const hasShadowChildren = Boolean(result?.navigation?.children?.some(child => child.treeScope === 'shadow'));
     for (const child of result?.navigation?.children || []) {
-      ui.childSelect.appendChild(new Option(`${child.index + 1}. ${child.label}`, String(child.index)));
+      const scope = hasShadowChildren ? `${child.treeScope === 'shadow' ? 'Shadow' : 'Light'} · ` : '';
+      ui.childSelect.appendChild(new Option(`${child.index + 1}. ${scope}${child.label}`, String(child.index)));
     }
 
     ui.siblingMetric.textContent = hasResult
@@ -729,11 +804,14 @@
       ui.frameTypeValue.textContent = 'TOP FRAME';
       ui.frameUrlValue.textContent = location.href;
       ui.frameDepthValue.textContent = '0';
+      ui.shadowDepthValue.textContent = '0';
+      ui.shadowHostsValue.textContent = 'Document tree';
       ui.frameBadge.textContent = 'TOP FRAME';
       setLocatorView(ui.cssValue, ui.cssBadge, null, false);
       setLocatorView(ui.xpathValue, ui.xpathBadge, null, false);
       setLocatorView(ui.jsPathValue, ui.jsPathBadge, null, false);
       ui.jsonPreview.textContent = '固定した要素のJSONがここに表示されます。';
+      renderStylesView(null);
       return;
     }
 
@@ -751,11 +829,16 @@
     ui.frameTypeValue.textContent = frameBadgeText(result.frame);
     ui.frameUrlValue.textContent = result.frame?.url || '—';
     ui.frameDepthValue.textContent = String(result.frame?.depth ?? 0);
+    ui.shadowDepthValue.textContent = String(result.shadow?.depth || 0);
+    ui.shadowHostsValue.textContent = result.shadow?.inside
+      ? result.shadow.hosts.map(host => host.label).join(' → ')
+      : 'Document tree';
     const frameRelative = Boolean(result.locators?.context?.frameRelative);
     setLocatorView(ui.cssValue, ui.cssBadge, result.locators?.css, frameRelative);
     setLocatorView(ui.xpathValue, ui.xpathBadge, result.locators?.xpath, frameRelative);
     setLocatorView(ui.jsPathValue, ui.jsPathBadge, result.locators?.jsPath, frameRelative);
     ui.jsonPreview.textContent = JSON.stringify(result, null, 2);
+    renderStylesView(result);
   }
 
   function setActiveTab(tabName) {
@@ -1058,26 +1141,44 @@
     ui.drag = null;
   }
 
-  function clampPanelWidth(width) {
-    const available = Math.max(240, window.innerWidth - 16);
+  function clampPanelWidth(width, maximumWidth = window.innerWidth - 16) {
+    const available = Math.max(240, Math.min(window.innerWidth - 16, maximumWidth));
     const minimum = Math.min(MIN_PANEL_WIDTH, available);
     return Math.min(available, Math.max(minimum, width));
+  }
+
+  function clampPanelHeight(height, top) {
+    const available = Math.max(220, window.innerHeight - Math.max(8, top) - 8);
+    const minimum = Math.min(MIN_PANEL_HEIGHT, available);
+    return Math.min(available, Math.max(minimum, height));
   }
 
   function beginPanelResize(event) {
     if (event.button !== 0 || !ui.panel) return;
     const handle = event.currentTarget;
-    const side = handle.dataset.resizeSide;
+    const direction = handle.dataset.resizeDirection || handle.dataset.resizeSide;
     const rect = ui.panel.getBoundingClientRect();
     ui.resize = {
       pointerId: event.pointerId,
-      side,
+      direction,
+      handle,
+      startX: event.clientX,
+      startY: event.clientY,
       left: rect.left,
-      right: rect.right
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height
     };
     ui.panel.style.right = 'auto';
     ui.panel.style.left = `${rect.left}px`;
     ui.panel.style.width = `${rect.width}px`;
+    ui.panel.style.top = `${rect.top}px`;
+    if (direction.includes('bottom')) {
+      ui.panel.style.height = `${rect.height}px`;
+      ui.panel.dataset.explicitHeight = 'true';
+    }
     handle.setPointerCapture(event.pointerId);
     event.preventDefault();
     event.stopPropagation();
@@ -1085,24 +1186,29 @@
 
   function resizePanel(event) {
     if (!ui.resize || event.pointerId !== ui.resize.pointerId) return;
-    let width;
-    let left;
-    if (ui.resize.side === 'left') {
-      width = clampPanelWidth(ui.resize.right - event.clientX);
+    const direction = ui.resize.direction;
+    let width = ui.resize.width;
+    let left = ui.resize.left;
+    let height = ui.resize.height;
+    if (direction.includes('left')) {
+      width = clampPanelWidth(ui.resize.right - event.clientX, ui.resize.right - 8);
       left = ui.resize.right - width;
-    } else {
-      width = clampPanelWidth(event.clientX - ui.resize.left);
-      left = ui.resize.left;
+    } else if (direction.includes('right')) {
+      width = clampPanelWidth(event.clientX - ui.resize.left, window.innerWidth - ui.resize.left - 8);
     }
-    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    left = Math.max(8, left);
+    if (direction.includes('bottom')) {
+      height = clampPanelHeight(event.clientY - ui.resize.top, ui.resize.top);
+    }
     ui.panel.style.left = `${left}px`;
     ui.panel.style.width = `${width}px`;
+    if (direction.includes('bottom')) ui.panel.style.height = `${height}px`;
   }
 
   function endPanelResize(event) {
     if (!ui.resize || event.pointerId !== ui.resize.pointerId) return;
     try {
-      event.currentTarget.releasePointerCapture(event.pointerId);
+      ui.resize.handle?.releasePointerCapture(event.pointerId);
     } catch {}
     ui.resize = null;
   }
@@ -1112,10 +1218,16 @@
     const rect = ui.panel.getBoundingClientRect();
     const width = clampPanelWidth(rect.width || DEFAULT_PANEL_WIDTH);
     if (Math.abs(width - rect.width) > 0.5) ui.panel.style.width = `${width}px`;
-    if (ui.panel.style.left === '') return;
-    const position = clampPanelPosition(rect.left, rect.top);
-    ui.panel.style.left = `${position.left}px`;
-    ui.panel.style.top = `${position.top}px`;
+    const explicitHeight = ui.panel.dataset.explicitHeight === 'true';
+    if (explicitHeight) {
+      const height = clampPanelHeight(rect.height, rect.top);
+      if (Math.abs(height - rect.height) > 0.5) ui.panel.style.height = `${height}px`;
+    }
+    if (ui.panel.style.left !== '') {
+      const position = clampPanelPosition(rect.left, rect.top);
+      ui.panel.style.left = `${position.left}px`;
+      ui.panel.style.top = `${position.top}px`;
+    }
   }
 
   function createStyles() {
@@ -1171,11 +1283,14 @@
         --ei-danger: #b65d58;
         --ei-spectrum: linear-gradient(90deg, #8f82dc 0%, #66a7e8 24%, #65c6b1 49%, #e5bf67 73%, #d87891 100%);
         position: fixed;
+        display: flex;
+        flex-direction: column;
         top: 14px;
         right: 14px;
         z-index: 2;
         width: 468px;
         min-width: min(360px, calc(100vw - 16px));
+        min-height: min(440px, calc(100vh - 16px));
         max-width: calc(100vw - 16px);
         max-height: calc(100vh - 28px);
         overflow: hidden;
@@ -1295,11 +1410,14 @@
       .pin-count { display: inline-grid; place-items: center; min-width: 16px; height: 16px; border-radius: 999px; background: rgba(32,38,45,.08); color: #4b5560; font-size: 8px; }
       .workspace {
         display: flex;
+        flex: 1 1 auto;
         flex-direction: column;
+        min-height: 0;
         max-height: calc(100vh - 80px);
         overflow: hidden;
         padding: 10px 12px 0;
       }
+      .panel[data-explicit-height="true"] .workspace { max-height: none; }
       .fixed-stack {
         flex: 0 0 auto;
         border: 1px solid var(--ei-line);
@@ -1391,6 +1509,32 @@
       .geometry-middle { display: grid; place-items: center; width: 78%; min-height: 82px; border: 1px dashed rgba(224,230,236,.28); border-radius: 9px; }
       .geometry-core { display: grid; place-items: center; min-width: 74px; min-height: 48px; border: 1px solid transparent; border-radius: 8px; background: linear-gradient(var(--ei-graphite-soft), var(--ei-graphite-soft)) padding-box, var(--ei-spectrum) border-box; color: #f2f5f7; font: 650 12px/1 ui-monospace,SFMono-Regular,Consolas,monospace; }
       .geometry-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+      .styles-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+      .styles-section {
+        min-width: 0;
+        border: 1px solid var(--ei-line);
+        border-radius: 11px;
+        padding: 10px;
+        background: var(--ei-surface);
+        box-shadow: 0 1px 0 rgba(255,255,255,.72) inset;
+      }
+      .styles-section-title { margin: 0 0 8px; color: #69737e; font-size: 8.5px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; }
+      .box-model-diagram { display: grid; gap: 5px; border-radius: 10px; padding: 8px; background: rgba(32,38,45,.045); }
+      .box-model-layer { display: grid; gap: 5px; border: 1px solid var(--ei-line); border-radius: 8px; padding: 7px; }
+      .box-model-layer.margin { background: rgba(224,211,176,.28); }
+      .box-model-layer.border { background: rgba(191,202,214,.3); }
+      .box-model-layer.padding { background: rgba(195,220,211,.32); }
+      .box-model-layer.content { min-height: 54px; place-items: center; border-color: transparent; background: linear-gradient(var(--ei-graphite-soft), var(--ei-graphite-soft)) padding-box, var(--ei-spectrum) border-box; color: #f3f6f8; }
+      .box-model-layer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #59636e; font-size: 8px; text-transform: uppercase; letter-spacing: .055em; }
+      .box-model-layer-head code { overflow: hidden; color: #39424c; text-overflow: ellipsis; white-space: nowrap; font: 8.5px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; text-transform: none; letter-spacing: 0; }
+      .box-model-layer.content .box-model-layer-head { width: 100%; color: #bfc7cf; }
+      .box-model-layer.content .box-model-layer-head code { color: #f3f6f8; font-size: 11px; font-weight: 650; }
+      .box-model-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+      .style-property-grid { display: grid; grid-template-columns: 1fr; gap: 0; }
+      .style-property { display: grid; grid-template-columns: minmax(118px,.8fr) minmax(0,1.2fr); gap: 8px; align-items: baseline; min-width: 0; border-bottom: 1px solid rgba(32,38,45,.08); padding: 6px 0; }
+      .style-property:last-child { border-bottom: 0; }
+      .style-property-name { overflow: hidden; color: var(--ei-faint); text-overflow: ellipsis; white-space: nowrap; font-size: 8.5px; }
+      .style-property-value { overflow: hidden; color: #29313a; text-align: right; text-overflow: ellipsis; white-space: nowrap; font: 9.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
       .locator-card { padding: 9px 0 10px; border-bottom: 1px solid rgba(32,38,45,.08); }
       .locator-card:first-child { padding-top: 0; }
       .locator-card:last-child { border-bottom: 0; }
@@ -1447,13 +1591,38 @@
       .local-state { display: inline-flex; align-items: center; gap: 6px; }
       .local-state::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--ei-success); box-shadow: 0 0 0 2px rgba(79,138,104,.12); }
       .keycap { border: 1px solid var(--ei-line); border-radius: 5px; padding: 1px 5px; background: rgba(255,255,255,.58); color: #69737e; font-size: 8px; }
-      .resize-handle { position: absolute; top: 56px; bottom: 0; z-index: 3; width: 8px; cursor: ew-resize; touch-action: none; }
-      .resize-handle.left { left: -1px; }
-      .resize-handle.right { right: -1px; }
-      .resize-handle::after { content: ''; position: absolute; top: 42%; bottom: 42%; width: 2px; border-radius: 2px; background: rgba(75,88,102,.28); opacity: 0; transition: opacity 120ms ease; }
-      .resize-handle.left::after { left: 1px; }
-      .resize-handle.right::after { right: 1px; }
-      .resize-handle:hover::after, .resize-handle:active::after { opacity: 1; }
+      .resize-handle { position: absolute; z-index: 3; touch-action: none; }
+      .resize-handle.edge-left, .resize-handle.edge-right { top: 56px; bottom: 12px; width: 8px; cursor: ew-resize; }
+      .resize-handle.edge-left { left: -1px; }
+      .resize-handle.edge-right { right: -1px; }
+      .resize-handle.edge-bottom { left: 12px; right: 12px; bottom: -1px; height: 8px; cursor: ns-resize; }
+      .resize-handle.edge-left::after, .resize-handle.edge-right::after, .resize-handle.edge-bottom::after {
+        content: '';
+        position: absolute;
+        border-radius: 2px;
+        background: rgba(75,88,102,.28);
+        opacity: 0;
+        transition: opacity 120ms ease;
+      }
+      .resize-handle.edge-left::after, .resize-handle.edge-right::after { top: 42%; bottom: 42%; width: 2px; }
+      .resize-handle.edge-left::after { left: 1px; }
+      .resize-handle.edge-right::after { right: 1px; }
+      .resize-handle.edge-bottom::after { left: 43%; right: 43%; bottom: 1px; height: 2px; }
+      .resize-handle.corner { bottom: 0; z-index: 5; width: 16px; height: 16px; }
+      .resize-handle.corner-left { left: 0; cursor: nesw-resize; }
+      .resize-handle.corner-right { right: 0; cursor: nwse-resize; }
+      .resize-handle.corner-right::after {
+        content: '';
+        position: absolute;
+        right: 3px;
+        bottom: 3px;
+        width: 9px;
+        height: 9px;
+        opacity: .42;
+        background: repeating-linear-gradient(135deg, transparent 0 3px, rgba(75,88,102,.48) 3px 4px);
+        transition: opacity 120ms ease;
+      }
+      .resize-handle:hover::after, .resize-handle:active::after { opacity: .9; }
       .panel[data-density="comfortable"] .titlebar { min-height: 60px; padding-block: 12px; }
       .panel[data-density="comfortable"] .workspace { padding-inline: 15px; }
       .panel[data-density="comfortable"] .command-surface { padding: 13px 14px 14px; }
@@ -1463,12 +1632,15 @@
       .panel[data-density="comfortable"] .tabs button { min-height: 39px; }
       .panel[data-density="comfortable"] .view-scroll { padding-top: 13px; }
       .panel[data-density="comfortable"] .overview-section, .panel[data-density="comfortable"] .compare-card { padding: 13px; }
+      .panel[data-density="comfortable"] .styles-section { padding: 13px; }
       @container inspector (min-width: 440px) {
         .overview-grid { grid-template-columns: 1.12fr .9fr .98fr; }
       }
       @container inspector (min-width: 620px) {
         .compare-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
         .locator-body { grid-template-columns: minmax(0,1fr) 62px; }
+        .styles-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+        .box-model-section { grid-column: 1 / -1; }
       }
       @container inspector (min-width: 920px) {
         .compare-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
@@ -1580,6 +1752,7 @@
 
         <nav class="tabs" role="tablist" aria-label="Inspector views">
           <button type="button" role="tab" data-tab="overview" data-active="true">Overview</button>
+          <button type="button" role="tab" data-tab="styles" data-active="false">Styles</button>
           <button type="button" role="tab" data-tab="locators" data-active="false">Locators</button>
           <button type="button" role="tab" data-tab="compare" data-active="false" hidden>Compare</button>
           <button type="button" role="tab" data-tab="json" data-active="false">JSON</button>
@@ -1610,7 +1783,47 @@
                   <div class="info-cell"><span class="info-label">Type</span><code class="info-value" data-value="frame-type">TOP FRAME</code></div>
                   <div class="info-cell"><span class="info-label">Document</span><code class="info-value wrap" data-value="frame-url">—</code></div>
                   <div class="info-cell"><span class="info-label">Depth</span><code class="info-value" data-value="frame-depth">0</code></div>
+                  <div class="info-cell"><span class="info-label">Shadow depth</span><code class="info-value" data-value="shadow-depth">0</code></div>
+                  <div class="info-cell"><span class="info-label">Shadow hosts</span><code class="info-value wrap" data-value="shadow-hosts">Document tree</code></div>
                 </div>
+              </section>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-panel="styles" hidden>
+            <div class="styles-grid">
+              <section class="styles-section box-model-section">
+                <h2 class="styles-section-title">Box model</h2>
+                <div class="box-model-diagram">
+                  <div class="box-model-layer margin">
+                    <div class="box-model-layer-head"><span>Margin</span><code data-box-value="margin">—</code></div>
+                    <div class="box-model-layer border">
+                      <div class="box-model-layer-head"><span>Border</span><code data-box-value="border">—</code></div>
+                      <div class="box-model-layer padding">
+                        <div class="box-model-layer-head"><span>Padding</span><code data-box-value="padding">—</code></div>
+                        <div class="box-model-layer content">
+                          <div class="box-model-layer-head"><span>Content</span><code data-box-value="content">—</code></div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="box-model-meta">
+                  <div class="info-cell"><span class="info-label">Border box</span><code class="info-value" data-box-value="border-box">—</code></div>
+                  <div class="info-cell"><span class="info-label">Scroll size</span><code class="info-value" data-box-value="scroll">—</code></div>
+                </div>
+              </section>
+              <section class="styles-section">
+                <h2 class="styles-section-title">Layout</h2>
+                <div class="style-property-grid" data-style-group="layout"></div>
+              </section>
+              <section class="styles-section">
+                <h2 class="styles-section-title">Flex / Grid</h2>
+                <div class="style-property-grid" data-style-group="flex-grid"></div>
+              </section>
+              <section class="styles-section">
+                <h2 class="styles-section-title">Typography</h2>
+                <div class="style-property-grid" data-style-group="typography"></div>
               </section>
             </div>
           </div>
@@ -1656,8 +1869,11 @@
           <span><span class="keycap">Esc</span> close</span>
         </footer>
       </div>
-      <div class="resize-handle left" data-resize-side="left" role="separator" aria-orientation="vertical" aria-label="パネル左端をリサイズ"></div>
-      <div class="resize-handle right" data-resize-side="right" role="separator" aria-orientation="vertical" aria-label="パネル右端をリサイズ"></div>
+      <div class="resize-handle edge-left" data-resize-side="left" data-resize-direction="left" role="separator" aria-orientation="vertical" aria-label="パネル左端をリサイズ"></div>
+      <div class="resize-handle edge-right" data-resize-side="right" data-resize-direction="right" role="separator" aria-orientation="vertical" aria-label="パネル右端をリサイズ"></div>
+      <div class="resize-handle edge-bottom" data-resize-direction="bottom" role="separator" aria-orientation="horizontal" aria-label="パネル下端をリサイズ"></div>
+      <div class="resize-handle corner corner-left" data-resize-direction="bottom-left" aria-label="パネル左下を斜めにリサイズ"></div>
+      <div class="resize-handle corner corner-right" data-resize-direction="bottom-right" aria-label="パネル右下を斜めにリサイズ"></div>
     `;
 
     ui.panel = panel;
@@ -1697,6 +1913,17 @@
     ui.frameTypeValue = panel.querySelector('[data-value="frame-type"]');
     ui.frameUrlValue = panel.querySelector('[data-value="frame-url"]');
     ui.frameDepthValue = panel.querySelector('[data-value="frame-depth"]');
+    ui.shadowDepthValue = panel.querySelector('[data-value="shadow-depth"]');
+    ui.shadowHostsValue = panel.querySelector('[data-value="shadow-hosts"]');
+    ui.boxMarginValue = panel.querySelector('[data-box-value="margin"]');
+    ui.boxBorderValue = panel.querySelector('[data-box-value="border"]');
+    ui.boxPaddingValue = panel.querySelector('[data-box-value="padding"]');
+    ui.boxContentValue = panel.querySelector('[data-box-value="content"]');
+    ui.boxBorderBoxValue = panel.querySelector('[data-box-value="border-box"]');
+    ui.boxScrollValue = panel.querySelector('[data-box-value="scroll"]');
+    ui.layoutStylesGrid = panel.querySelector('[data-style-group="layout"]');
+    ui.flexGridStylesGrid = panel.querySelector('[data-style-group="flex-grid"]');
+    ui.typographyStylesGrid = panel.querySelector('[data-style-group="typography"]');
     ui.cssValue = panel.querySelector('[data-locator="css"] .code-box');
     ui.cssBadge = panel.querySelector('[data-locator="css"] .locator-badge');
     ui.xpathValue = panel.querySelector('[data-locator="xpath"] .code-box');
@@ -1754,7 +1981,7 @@
       }
     });
 
-    for (const handle of panel.querySelectorAll('[data-resize-side]')) {
+    for (const handle of panel.querySelectorAll('[data-resize-direction]')) {
       handle.addEventListener('pointerdown', beginPanelResize);
       handle.addEventListener('pointermove', resizePanel);
       handle.addEventListener('pointerup', endPanelResize);

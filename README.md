@@ -4,7 +4,7 @@ Chromeのツールバーから起動し、ページ上のDOM要素を視覚的�
 
 ## 現在のバージョン
 
-`0.9.0`
+`0.10.0`
 
 ## 起動
 
@@ -26,23 +26,24 @@ Chromeのツールバーから起動し、ページ上のDOM要素を視覚的�
 ↓
 クリックして固定
 ↓
-固定Hierarchy・選択履歴・ピン比較・Overview / Locators / JSONを確認
+固定Hierarchy・選択履歴・ピン比較・Overview / Styles / Locators / JSONを確認
 ```
 
 ### 専用ウィンドウ
 
 - ヘッダをドラッグして移動できます。
-- 左右端をドラッグして横幅を変更できます。
+- 左右端で横幅、下端で高さ、左下・右下で幅と高さを変更できます。
 - ヘッダの`COMPACT` / `COMFORTABLE`で表示密度を切り替えます。
 - Hierarchyはタブ外の固定エリアに常時表示します。
 - 戻る・進むボタン、履歴ドロップダウンで過去の選択対象を移動できます。
 - 現在対象を最大4件までピン留めし、`Compare`で比較できます。
 - `Overview`で対象情報を確認します。
+- `Styles`でBox Modelと主要Computed Styleを確認します。
 - `Locators`でCSS Selector、XPath、JS Pathを確認・コピーします。
 - `JSON`で全結果をコピーまたはファイル保存します。
 - `prefers-reduced-motion`、`prefers-reduced-transparency`、`prefers-contrast`へ対応します。
 
-UIはプロジェクト内の`apple-design`スキルを設計基準として、即時フィードバック、1:1ドラッグ、視覚階層、抑制されたマテリアル表現を重視しています。`0.9.0`ではCalm Hybrid方針を採用し、明るいニュートラル面と濃いグラファイトのデータ表示面を組み合わせています。虹色はメインアイコン、フォーカス境界、選択タブの細いアクセントだけに限定しています。
+UIはプロジェクト内の`apple-design`スキルを設計基準として、即時フィードバック、1:1ドラッグ、視覚階層、抑制されたマテリアル表現を重視しています。`0.9.0`で採用したCalm Hybrid方針を`0.10.0`でも維持し、明るいニュートラル面と濃いグラファイトのデータ表示面を組み合わせています。虹色はメインアイコン、フォーカス境界、選択タブの細いアクセントだけに限定しています。
 
 `TOP FRAME`またはiframe情報、選択状態、閉じる操作はヘッダ右側へ集約しています。閉じるアイコンは文字ではなくSVGで描画し、ボタン中央へ配置します。
 
@@ -78,7 +79,7 @@ UIはプロジェクト内の`apple-design`スキルを設計基準として、�
 
 ウィンドウには兄弟内の現在位置と子要素数を表示します。移動するたびにDOM解析とLocator生成を再実行します。
 
-Hierarchyは`Overview`、`Locators`、`JSON`のどのビューでも利用できます。
+Hierarchyは`Overview`、`Styles`、`Locators`、`Compare`、`JSON`のどのビューでも利用できます。open Shadow Root直下の要素では、親移動がShadow Hostへ接続され、Shadow子とLight DOM子が混在する場合だけ子一覧へ種別を表示します。
 
 ## 選択履歴
 
@@ -94,14 +95,22 @@ Hierarchyは`Overview`、`Locators`、`JSON`のどのビューでも利用でき
 
 履歴はLocatorから再探索せず、各フレーム内で保持した実際のElement参照を使用します。対象要素がページから削除されている場合は復元せず、エラーを表示します。
 
-## パネル幅と表示密度
+## パネルサイズと表示密度
 
-パネルの左右端をドラッグすると、横幅を約360pxからビューポート内の最大幅まで変更できます。ドラッグ中はPointer Captureを使用し、ポインターが端から外れても操作を継続します。
+パネルの左右端、下端、左下・右下をドラッグしてサイズを変更できます。ドラッグ中はPointer Captureを使用し、ポインターが端から外れても操作を継続します。
+
+```text
+最小幅: min(360px, viewport - 16px)
+最小高さ: min(440px, viewport - 16px)
+最大幅・高さ: viewport内
+```
+
+右下には控えめな斜線グリップを表示します。上端・上角はヘッダ移動との競合を避けるためリサイズ対象にしていません。
 
 - `Compact`: 操作列、Hierarchy、結果表示を高密度に配置
 - `Comfortable`: ボタン高、余白、結果カードの間隔を拡大
 
-パネル幅と表示密度はInspectorを閉じるまで維持し、Storageへ保存しません。画面幅が変わった場合は、パネルがビューポート外へ出ないよう幅と位置を補正します。
+パネル幅・高さと表示密度はInspectorを閉じるまで維持し、Storageへ保存しません。画面サイズが変わった場合は、パネルがビューポート外へ出ないようサイズと位置を補正します。
 
 ## ピン留め比較
 
@@ -151,7 +160,40 @@ document.querySelector('[data-testid="save-button"]')
 
 iframe内部で生成されたJS Pathは、そのiframeのDocument基準です。トップDocumentからクロスオリジンiframe内部へ直接到達する式ではありません。
 
-Locatorの状態バッジには、一意性に加えて`DOCUMENT`または`FRAME`基準を表示します。
+open Shadow DOM内部では、Shadow HostごとのSelectorを連結したJS Pathを生成します。
+
+```js
+document.querySelector('#app-host')
+  ?.shadowRoot?.querySelector('#toolbar-host')
+  ?.shadowRoot?.querySelector('[data-testid="save"]')
+```
+
+Locatorの状態バッジには、一意性に加えて`DOCUMENT`または`FRAME`、必要に応じて`SHADOW`基準を表示します。
+
+## open Shadow DOM対応
+
+open Shadow Root内部の要素を通常の要素と同じ選択操作で固定できます。
+
+- nested open Shadow Root
+- Shadow Root直下からShadow Hostへの親移動
+- Shadow子とLight DOM子を含む子要素一覧
+- Shadow Root内相対CSS Selector
+- Shadow Hostチェーンを含むJS Path
+- Shadow深度とHost一覧のJSON出力
+
+XPathはブラウザ仕様上Shadow Root境界を越えないため、Shadow DOM内部では`unsupported`として表示します。closed Shadow DOM内部は対象外です。
+
+## Computed Style / Box Model
+
+`Styles`タブでは、固定時点の`getComputedStyle()`と要素サイズから次を表示します。
+
+- margin / border / padding / contentの各領域
+- border boxとscroll size
+- display / position / box-sizing / width / height / overflow / z-index
+- Flex / Gridの方向・整列・gap・template
+- font / line-height / letter-spacing / text-align / color
+
+表示値は固定するたびに再取得され、JSONの`computedStyles`と`boxModel`にも含まれます。
 
 ## iframe対応
 
@@ -213,10 +255,14 @@ iframe間の選択結果はBackground Service Workerを介してトップフレ�
     "context": {
       "frameRelative": false,
       "frameId": 0,
-      "framePath": []
+      "framePath": [],
+      "shadowDepth": 0
     }
   },
   "navigation": {},
+  "shadow": {},
+  "computedStyles": {},
+  "boxModel": {},
   "frame": {},
   "svg": null,
   "ancestors": [],
@@ -238,7 +284,7 @@ iframe間の選択結果はBackground Service Workerを介してトップフレ�
 - DOM解析結果をサーバーへ送信しません。
 - localStorage、sessionStorage、Chrome Storageを使用しません。
 - 選択履歴を永続保存しません。
-- パネル幅、表示密度、ピン留め、比較内容を永続保存しません。
+- パネル幅・高さ、表示密度、ピン留め、比較内容を永続保存しません。
 
 Content Scriptは`<all_urls>`へ宣言されます。これはツールバー起動後に、トップページとiframe内の対象要素を選択・解析するためです。
 
@@ -248,8 +294,8 @@ Content Scriptは`<all_urls>`へ宣言されます。これはツールバー起
 
 - `chrome://`ページ、Chromeウェブストア、拡張機能管理ページなどでは利用できません。
 - closed Shadow DOM内部には対応していません。
-- open Shadow DOMの完全なHostチェーンとJS Pathは後続版の対象です。
 - XPathはShadow Root内部では生成できません。
+- Shadow Root内のCSS SelectorはそのShadow Root基準です。
 - iframe内LocatorはフレームDocument基準です。
 
 ## 開発時の確認
