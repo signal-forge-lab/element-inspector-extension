@@ -1,10 +1,14 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.8.1';
+  const EXTENSION_VERSION = '0.8.2';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
+  const MAX_HISTORY_ENTRIES = 100;
+  const MAX_PINNED_ENTRIES = 4;
+  const MIN_PANEL_WIDTH = 360;
+  const DEFAULT_PANEL_WIDTH = 468;
 
   const MESSAGE = Object.freeze({
     SET_ACTIVE: 'ELEMENT_INSPECTOR_SET_ACTIVE',
@@ -29,6 +33,7 @@
     shadow: null,
     marker: null,
     selectionRegistry: new Map(),
+    pinnedSelectionIds: new Set(),
     frameToken: createToken(),
     childFrameRequests: new Map(),
     frameContext: {
@@ -47,10 +52,17 @@
     pickButton: null,
     delayInput: null,
     delayButton: null,
+    densityButton: null,
     backButton: null,
+    historySelect: null,
     forwardButton: null,
+    pinButton: null,
+    pinCount: null,
     tabButtons: [],
     tabPanels: [],
+    compareTabButton: null,
+    compareGrid: null,
+    clearPinsButton: null,
     parentButton: null,
     previousButton: null,
     nextButton: null,
@@ -63,6 +75,11 @@
     identityValue: null,
     rectValue: null,
     textValue: null,
+    geometrySizeValue: null,
+    geometryPositionValue: null,
+    frameTypeValue: null,
+    frameUrlValue: null,
+    frameDepthValue: null,
     cssValue: null,
     cssBadge: null,
     xpathValue: null,
@@ -76,10 +93,14 @@
     countdownDeadline: 0,
     countdownRemaining: 0,
     drag: null,
+    resize: null,
     activeTab: 'overview',
+    density: 'compact',
     history: [],
     historyIndex: -1,
-    pendingHistoryIndex: null
+    pendingHistoryIndex: null,
+    currentSelectionId: null,
+    pins: []
   };
 
   function createToken() {
@@ -246,9 +267,15 @@
 
   function rememberSelection(selectionId, element) {
     frameState.selectionRegistry.set(selectionId, element);
-    while (frameState.selectionRegistry.size > 100) {
-      const oldestKey = frameState.selectionRegistry.keys().next().value;
-      frameState.selectionRegistry.delete(oldestKey);
+    while (frameState.selectionRegistry.size > MAX_HISTORY_ENTRIES + MAX_PINNED_ENTRIES) {
+      let removed = false;
+      for (const key of frameState.selectionRegistry.keys()) {
+        if (frameState.pinnedSelectionIds.has(key)) continue;
+        frameState.selectionRegistry.delete(key);
+        removed = true;
+        break;
+      }
+      if (!removed) break;
     }
   }
 
@@ -303,7 +330,7 @@
         kind: 'status',
         status: 'error',
         historyRestoreFailed: true,
-        message: '履歴の対象要素はページから削除されています。'
+        message: '保存した選択対象はページから削除されています。'
       });
       return;
     }
@@ -529,6 +556,134 @@
     badgeNode.dataset.unique = locator?.unique ? 'true' : 'false';
   }
 
+  function truncateLabel(value, maxLength = 48) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+  }
+
+  function historyEntryLabel(entry, index) {
+    const result = entry.result || {};
+    const identity = identityFromAttributes(result.selectedAttributes);
+    const frame = frameBadgeText(result.frame);
+    return `${index + 1}. <${result.selectedTag || 'element'}> ${truncateLabel(identity, 28)} · ${frame} · ${entry.reason || '選択'}`;
+  }
+
+  function renderHistoryMenu() {
+    if (!ui.historySelect) return;
+    ui.historySelect.replaceChildren();
+    if (!ui.history.length) {
+      ui.historySelect.appendChild(new Option('履歴なし', ''));
+      ui.historySelect.disabled = true;
+      return;
+    }
+    for (let index = 0; index < ui.history.length; index += 1) {
+      const entry = ui.history[index];
+      const option = new Option(historyEntryLabel(entry, index), String(index));
+      option.title = `${entry.reason || '選択'} · ${frameBadgeText(entry.result?.frame)}`;
+      ui.historySelect.appendChild(option);
+    }
+    ui.historySelect.disabled = ui.pendingHistoryIndex !== null;
+    ui.historySelect.value = String(Math.max(0, ui.historyIndex));
+    ui.historySelect.setAttribute('aria-label', `選択履歴 ${ui.historyIndex + 1} / ${ui.history.length}`);
+  }
+
+  function isCurrentPinned() {
+    return Boolean(ui.currentSelectionId) && ui.pins.some(pin =>
+      pin.selectionId === ui.currentSelectionId && pin.frameId === ui.selectedFrameId
+    );
+  }
+
+  function createComparisonField(label, value, options = {}) {
+    const field = document.createElement('div');
+    field.className = `compare-field${options.wide ? ' wide' : ''}`;
+    const labelNode = document.createElement('span');
+    labelNode.className = 'compare-label';
+    labelNode.textContent = label;
+    const valueNode = document.createElement('code');
+    valueNode.className = `compare-value${options.wrap ? ' wrap' : ''}`;
+    valueNode.textContent = value || '—';
+    field.append(labelNode, valueNode);
+    return field;
+  }
+
+  function renderPinnedComparisons() {
+    if (!ui.compareGrid || !ui.compareTabButton) return;
+    const pinCount = ui.pins.length;
+    ui.compareTabButton.hidden = pinCount === 0;
+    ui.compareTabButton.textContent = `Compare${pinCount ? ` ${pinCount}` : ''}`;
+    if (ui.pinCount) ui.pinCount.textContent = String(pinCount);
+    if (ui.clearPinsButton) ui.clearPinsButton.disabled = pinCount === 0;
+    ui.compareGrid.replaceChildren();
+
+    if (!pinCount) {
+      const empty = document.createElement('div');
+      empty.className = 'compare-empty';
+      empty.textContent = 'ピン留めした要素がここに表示されます。';
+      ui.compareGrid.appendChild(empty);
+      if (ui.activeTab === 'compare') setActiveTab('overview');
+      return;
+    }
+
+    for (const pin of ui.pins) {
+      const result = pin.result || {};
+      const card = document.createElement('article');
+      card.className = 'compare-card';
+      card.dataset.pinId = pin.pinId;
+
+      const head = document.createElement('div');
+      head.className = 'compare-head';
+      const titleWrap = document.createElement('div');
+      titleWrap.className = 'compare-title-wrap';
+      const title = document.createElement('strong');
+      title.className = 'compare-title';
+      title.textContent = `<${result.selectedTag || 'element'}>`;
+      const frame = document.createElement('span');
+      frame.className = 'compare-frame';
+      frame.textContent = frameBadgeText(result.frame);
+      titleWrap.append(title, frame);
+
+      const actions = document.createElement('div');
+      actions.className = 'compare-actions';
+      const restoreButton = document.createElement('button');
+      restoreButton.type = 'button';
+      restoreButton.dataset.pinAction = 'restore';
+      restoreButton.textContent = '選択';
+      const removeButton = document.createElement('button');
+      removeButton.type = 'button';
+      removeButton.dataset.pinAction = 'remove';
+      removeButton.setAttribute('aria-label', 'ピンを解除');
+      removeButton.textContent = '解除';
+      actions.append(restoreButton, removeButton);
+      head.append(titleWrap, actions);
+
+      const fields = document.createElement('div');
+      fields.className = 'compare-fields';
+      const rect = result.selectedRect;
+      fields.append(
+        createComparisonField('Identity', identityFromAttributes(result.selectedAttributes), { wide: true, wrap: true }),
+        createComparisonField('Rect', rect ? `${rect.width} × ${rect.height} · ${rect.left}, ${rect.top}` : '—'),
+        createComparisonField('Text', result.selectedText || 'テキストなし', { wide: true, wrap: true }),
+        createComparisonField('CSS Selector', result.locators?.css?.value || '生成できません', { wide: true, wrap: true }),
+        createComparisonField('XPath', result.locators?.xpath?.value || '生成できません', { wide: true, wrap: true }),
+        createComparisonField('JS Path', result.locators?.jsPath?.value || '生成できません', { wide: true, wrap: true })
+      );
+
+      const locatorActions = document.createElement('div');
+      locatorActions.className = 'compare-locators';
+      for (const [kind, label] of [['css', 'CSS'], ['xpath', 'XPath'], ['jsPath', 'JS']]) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.pinAction = 'copy-locator';
+        button.dataset.locatorKind = kind;
+        button.textContent = label;
+        button.disabled = !result.locators?.[kind]?.value;
+        locatorActions.appendChild(button);
+      }
+      card.append(head, fields, locatorActions);
+      ui.compareGrid.appendChild(card);
+    }
+  }
+
   function renderUI() {
     if (!ui.panel) return;
     const result = ui.result;
@@ -536,6 +691,14 @@
 
     ui.backButton.disabled = ui.historyIndex <= 0 || ui.pendingHistoryIndex !== null;
     ui.forwardButton.disabled = ui.historyIndex < 0 || ui.historyIndex >= ui.history.length - 1 || ui.pendingHistoryIndex !== null;
+    renderHistoryMenu();
+    if (ui.pinButton) {
+      ui.pinButton.disabled = !hasResult || !ui.currentSelectionId;
+      ui.pinButton.dataset.active = isCurrentPinned() ? 'true' : 'false';
+      ui.pinButton.setAttribute('aria-pressed', ui.pinButton.dataset.active);
+      ui.pinButton.title = isCurrentPinned() ? '現在の要素のピンを解除' : '現在の要素を比較へピン留め';
+    }
+    renderPinnedComparisons();
 
     ui.parentButton.disabled = !result?.navigation?.hasParent;
     ui.previousButton.disabled = !result?.navigation?.hasPreviousSibling;
@@ -561,6 +724,11 @@
       ui.identityValue.textContent = '—';
       ui.rectValue.textContent = '—';
       ui.textValue.textContent = 'ページ上の要素へポインターを移動してください。';
+      ui.geometrySizeValue.textContent = '—';
+      ui.geometryPositionValue.textContent = '—';
+      ui.frameTypeValue.textContent = 'TOP FRAME';
+      ui.frameUrlValue.textContent = location.href;
+      ui.frameDepthValue.textContent = '0';
       ui.frameBadge.textContent = 'TOP FRAME';
       setLocatorView(ui.cssValue, ui.cssBadge, null, false);
       setLocatorView(ui.xpathValue, ui.xpathBadge, null, false);
@@ -578,6 +746,11 @@
       ? `${rect.width} × ${rect.height} · ${rect.left}, ${rect.top}`
       : '—';
     ui.textValue.textContent = result.selectedText || 'テキストなし';
+    ui.geometrySizeValue.textContent = rect ? `${rect.width} × ${rect.height}` : '—';
+    ui.geometryPositionValue.textContent = rect ? `${rect.left}, ${rect.top}` : '—';
+    ui.frameTypeValue.textContent = frameBadgeText(result.frame);
+    ui.frameUrlValue.textContent = result.frame?.url || '—';
+    ui.frameDepthValue.textContent = String(result.frame?.depth ?? 0);
     const frameRelative = Boolean(result.locators?.context?.frameRelative);
     setLocatorView(ui.cssValue, ui.cssBadge, result.locators?.css, frameRelative);
     setLocatorView(ui.xpathValue, ui.xpathBadge, result.locators?.xpath, frameRelative);
@@ -586,6 +759,7 @@
   }
 
   function setActiveTab(tabName) {
+    if (tabName === 'compare' && !ui.pins.length) tabName = 'overview';
     ui.activeTab = tabName;
     for (const button of ui.tabButtons) {
       button.dataset.active = button.dataset.tab === tabName ? 'true' : 'false';
@@ -604,17 +778,18 @@
     ui.history.push({
       selectionId: event.selectionId,
       frameId: event.frameId,
-      result: event.result
+      result: event.result,
+      reason: event.reason || '選択'
     });
-    if (ui.history.length > 100) ui.history.shift();
+    if (ui.history.length > MAX_HISTORY_ENTRIES) ui.history.shift();
     ui.historyIndex = ui.history.length - 1;
   }
 
-  function navigateHistory(delta) {
+  function navigateHistoryToIndex(targetIndex) {
     if (ui.pendingHistoryIndex !== null) return;
-    const targetIndex = ui.historyIndex + delta;
     const entry = ui.history[targetIndex];
     if (!entry) return;
+    if (targetIndex === ui.historyIndex) return;
     ui.pendingHistoryIndex = targetIndex;
     renderUI();
     sendTopCommand('RESTORE_SELECTION', {
@@ -623,10 +798,108 @@
     });
   }
 
+  function navigateHistory(delta) {
+    navigateHistoryToIndex(ui.historyIndex + delta);
+  }
+
+  function toggleCurrentPin() {
+    if (!ui.result || !ui.currentSelectionId || !Number.isInteger(ui.selectedFrameId)) return;
+    const existingIndex = ui.pins.findIndex(pin =>
+      pin.selectionId === ui.currentSelectionId && pin.frameId === ui.selectedFrameId
+    );
+    if (existingIndex >= 0) {
+      const [removed] = ui.pins.splice(existingIndex, 1);
+      sendTopCommand('UNPIN_SELECTION', {
+        targetFrameId: removed.frameId,
+        selectionId: removed.selectionId
+      });
+      setUIStatus('ピン留めを解除しました。', 'success');
+      renderUI();
+      return;
+    }
+    if (ui.pins.length >= MAX_PINNED_ENTRIES) {
+      setUIStatus(`ピン留めは最大${MAX_PINNED_ENTRIES}件です。`, 'error');
+      return;
+    }
+    const pin = {
+      pinId: createToken(),
+      selectionId: ui.currentSelectionId,
+      frameId: ui.selectedFrameId,
+      result: ui.result
+    };
+    ui.pins.push(pin);
+    sendTopCommand('PIN_SELECTION', {
+      targetFrameId: pin.frameId,
+      selectionId: pin.selectionId
+    });
+    setUIStatus(`比較へピン留めしました（${ui.pins.length}/${MAX_PINNED_ENTRIES}）。`, 'success');
+    renderUI();
+  }
+
+  function removePin(pinId) {
+    const index = ui.pins.findIndex(pin => pin.pinId === pinId);
+    if (index < 0) return;
+    const [removed] = ui.pins.splice(index, 1);
+    sendTopCommand('UNPIN_SELECTION', {
+      targetFrameId: removed.frameId,
+      selectionId: removed.selectionId
+    });
+    setUIStatus('ピン留めを解除しました。', 'success');
+    renderUI();
+  }
+
+  function clearPins() {
+    for (const pin of ui.pins) {
+      sendTopCommand('UNPIN_SELECTION', {
+        targetFrameId: pin.frameId,
+        selectionId: pin.selectionId
+      });
+    }
+    ui.pins = [];
+    setUIStatus('すべてのピン留めを解除しました。', 'success');
+    renderUI();
+  }
+
+  function restorePinnedSelection(pinId) {
+    const pin = ui.pins.find(item => item.pinId === pinId);
+    if (!pin) return;
+    setUIStatus('ピン留めした要素へ移動しています。');
+    sendTopCommand('RESTORE_SELECTION', {
+      targetFrameId: pin.frameId,
+      selectionId: pin.selectionId
+    });
+  }
+
+  async function copyPinnedLocator(pinId, kind) {
+    const pin = ui.pins.find(item => item.pinId === pinId);
+    const value = pin?.result?.locators?.[kind]?.value;
+    if (!value) return;
+    try {
+      await copyText(value);
+      setUIStatus(`${kind === 'jsPath' ? 'JS Path' : kind.toUpperCase()}をコピーしました。`, 'success');
+    } catch (error) {
+      setUIStatus(error instanceof Error ? error.message : String(error), 'error');
+    }
+  }
+
+  function setDensity(density) {
+    ui.density = density === 'comfortable' ? 'comfortable' : 'compact';
+    if (!ui.panel || !ui.densityButton) return;
+    ui.panel.dataset.density = ui.density;
+    ui.densityButton.textContent = ui.density === 'compact' ? 'COMPACT' : 'COMFORTABLE';
+    ui.densityButton.setAttribute('aria-label', `表示密度: ${ui.density === 'compact' ? 'Compact' : 'Comfortable'}`);
+    ui.densityButton.title = ui.density === 'compact' ? 'Comfortable表示へ切り替え' : 'Compact表示へ切り替え';
+  }
+
+  function toggleDensity() {
+    setDensity(ui.density === 'compact' ? 'comfortable' : 'compact');
+  }
+
   function beginPicking() {
     clearUICountdown();
     ui.result = null;
     ui.selectedFrameId = null;
+    ui.currentSelectionId = null;
     ui.targetName.textContent = 'Select an element';
     setUIMode('picking');
     setUIStatus('対象をホバーし、クリックして固定してください。');
@@ -728,6 +1001,7 @@
       ui.pendingHistoryIndex = null;
       ui.result = event.result;
       ui.selectedFrameId = event.frameId;
+      ui.currentSelectionId = event.selectionId || null;
       setUIMode('fixed');
       setUIStatus(`${event.reason || '選択'}で対象を固定しました。`, 'success');
       renderUI();
@@ -784,9 +1058,61 @@
     ui.drag = null;
   }
 
-  function keepPanelInViewport() {
-    if (!ui.panel || ui.panel.style.left === '') return;
+  function clampPanelWidth(width) {
+    const available = Math.max(240, window.innerWidth - 16);
+    const minimum = Math.min(MIN_PANEL_WIDTH, available);
+    return Math.min(available, Math.max(minimum, width));
+  }
+
+  function beginPanelResize(event) {
+    if (event.button !== 0 || !ui.panel) return;
+    const handle = event.currentTarget;
+    const side = handle.dataset.resizeSide;
     const rect = ui.panel.getBoundingClientRect();
+    ui.resize = {
+      pointerId: event.pointerId,
+      side,
+      left: rect.left,
+      right: rect.right
+    };
+    ui.panel.style.right = 'auto';
+    ui.panel.style.left = `${rect.left}px`;
+    ui.panel.style.width = `${rect.width}px`;
+    handle.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    event.stopPropagation();
+  }
+
+  function resizePanel(event) {
+    if (!ui.resize || event.pointerId !== ui.resize.pointerId) return;
+    let width;
+    let left;
+    if (ui.resize.side === 'left') {
+      width = clampPanelWidth(ui.resize.right - event.clientX);
+      left = ui.resize.right - width;
+    } else {
+      width = clampPanelWidth(event.clientX - ui.resize.left);
+      left = ui.resize.left;
+    }
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    ui.panel.style.left = `${left}px`;
+    ui.panel.style.width = `${width}px`;
+  }
+
+  function endPanelResize(event) {
+    if (!ui.resize || event.pointerId !== ui.resize.pointerId) return;
+    try {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    } catch {}
+    ui.resize = null;
+  }
+
+  function keepPanelInViewport() {
+    if (!ui.panel) return;
+    const rect = ui.panel.getBoundingClientRect();
+    const width = clampPanelWidth(rect.width || DEFAULT_PANEL_WIDTH);
+    if (Math.abs(width - rect.width) > 0.5) ui.panel.style.width = `${width}px`;
+    if (ui.panel.style.left === '') return;
     const position = clampPanelPosition(rect.left, rect.top);
     ui.panel.style.left = `${position.left}px`;
     ui.panel.style.top = `${position.top}px`;
@@ -834,30 +1160,44 @@
         right: 14px;
         z-index: 2;
         width: 468px;
-        max-width: calc(100vw - 28px);
+        min-width: min(360px, calc(100vw - 16px));
+        max-width: calc(100vw - 16px);
         max-height: calc(100vh - 28px);
         overflow: hidden;
         pointer-events: auto;
-        color: #eef1f4;
-        border: 1px solid rgba(255,255,255,.105);
-        border-radius: 16px;
+        color: #f1f3f8;
+        border: 1px solid rgba(190,205,255,.16);
+        border-radius: 18px;
         background:
-          radial-gradient(circle at 10% -10%, rgba(113,142,194,.12), transparent 36%),
-          rgba(25,28,33,.92);
-        backdrop-filter: blur(24px) saturate(135%);
-        -webkit-backdrop-filter: blur(24px) saturate(135%);
-        box-shadow: 0 26px 72px rgba(0,0,0,.48), 0 1px 0 rgba(255,255,255,.065) inset;
+          radial-gradient(circle at 18% -8%, rgba(113,155,255,.22), transparent 38%),
+          radial-gradient(circle at 92% 24%, rgba(132,96,210,.16), transparent 36%),
+          linear-gradient(145deg, rgba(35,42,66,.94), rgba(20,25,41,.94));
+        backdrop-filter: blur(28px) saturate(145%);
+        -webkit-backdrop-filter: blur(28px) saturate(145%);
+        box-shadow: 0 30px 90px rgba(0,0,0,.54), 0 1px 0 rgba(255,255,255,.09) inset;
         font: 12px/1.45 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
         font-optical-sizing: auto;
         animation: ei-panel-arrive 160ms cubic-bezier(.2,.8,.2,1) both;
+        container: inspector / inline-size;
+        isolation: isolate;
       }
+      .panel::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        border-radius: inherit;
+        background: linear-gradient(180deg, rgba(255,255,255,.045), transparent 20%);
+      }
+      .panel > * { position: relative; z-index: 1; }
       .titlebar {
         position: relative;
         display: flex;
         align-items: center;
         gap: 10px;
-        min-height: 52px;
-        padding: 9px 10px 9px 13px;
+        min-height: 54px;
+        padding: 9px 10px 9px 14px;
         cursor: grab;
         user-select: none;
         touch-action: none;
@@ -867,7 +1207,7 @@
         position: absolute;
         left: 12px; right: 12px; bottom: 0;
         height: 1px;
-        background: linear-gradient(90deg, transparent, rgba(255,255,255,.09) 12%, rgba(255,255,255,.09) 88%, transparent);
+        background: linear-gradient(90deg, transparent, rgba(170,190,255,.15) 12%, rgba(170,190,255,.15) 88%, transparent);
       }
       .titlebar:active { cursor: grabbing; }
       .brand-mark {
@@ -876,10 +1216,10 @@
         place-items: center;
         width: 28px;
         height: 28px;
-        border: 1px solid rgba(255,255,255,.15);
+        border: 1px solid rgba(189,205,255,.22);
         border-radius: 8px;
-        background: linear-gradient(145deg, rgba(126,157,213,.24), rgba(61,70,84,.3));
-        box-shadow: 0 1px 0 rgba(255,255,255,.1) inset;
+        background: linear-gradient(145deg, rgba(113,155,255,.3), rgba(75,70,130,.28));
+        box-shadow: 0 1px 0 rgba(255,255,255,.14) inset, 0 8px 22px rgba(25,35,78,.25);
       }
       .brand-mark::before {
         content: '';
@@ -887,47 +1227,47 @@
         height: 13px;
         border: 1.5px solid #dbe4f5;
         border-radius: 3px;
-        box-shadow: 5px 5px 0 -3px #8ba7d9;
+        box-shadow: 5px 5px 0 -3px #719bff;
       }
       .brand-copy { min-width: 0; flex: 1; }
       .brand-title { display: block; font-size: 12.5px; font-weight: 690; letter-spacing: -.012em; }
-      .brand-subtitle { display: block; margin-top: 1px; color: #8b949f; font-size: 9.5px; letter-spacing: .012em; }
+      .brand-subtitle { display: block; margin-top: 1px; color: #9ba5b8; font-size: 9.5px; letter-spacing: .012em; }
       .title-actions { display: flex; align-items: center; gap: 6px; }
       .mode-pill, .frame-pill, .locator-badge {
         display: inline-flex;
         align-items: center;
         min-height: 20px;
-        border: 1px solid rgba(255,255,255,.11);
+        border: 1px solid rgba(190,205,255,.16);
         border-radius: 999px;
         padding: 2px 7px;
-        background: rgba(255,255,255,.038);
-        color: #aab2bd;
+        background: rgba(23,28,48,.48);
+        color: #a9b1c2;
         font-size: 8.5px;
         font-weight: 650;
         letter-spacing: .065em;
         white-space: nowrap;
       }
-      .mode-pill[data-mode="picking"] { color: #b9cdf4; border-color: rgba(122,162,247,.38); }
-      .mode-pill[data-mode="fixed"] { color: #a8dfbf; border-color: rgba(75,180,123,.34); }
+      .mode-pill[data-mode="picking"] { color: #9fc0ff; border-color: rgba(113,155,255,.46); }
+      .mode-pill[data-mode="fixed"] { color: #91e2b4; border-color: rgba(119,214,163,.42); }
       .mode-pill[data-mode="countdown"] { color: #ffd58d; border-color: rgba(226,169,69,.38); }
       button, input, select { font: inherit; }
       button {
         min-height: 31px;
-        border: 1px solid rgba(255,255,255,.12);
+        border: 1px solid rgba(184,200,255,.16);
         border-radius: 8px;
         padding: 5px 9px;
-        background: rgba(255,255,255,.052);
-        color: #e9ecef;
-        box-shadow: 0 1px 0 rgba(255,255,255,.04) inset;
+        background: rgba(44,51,82,.48);
+        color: #edf1f8;
+        box-shadow: 0 1px 0 rgba(255,255,255,.055) inset;
         cursor: pointer;
         transition: background 120ms ease, border-color 120ms ease, transform 90ms ease;
       }
-      button:hover:not(:disabled) { background: rgba(255,255,255,.085); border-color: rgba(255,255,255,.18); }
+      button:hover:not(:disabled) { background: rgba(68,80,125,.58); border-color: rgba(190,208,255,.28); }
       button:active:not(:disabled) { transform: scale(.97); }
-      button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #8fb4f7; outline-offset: 2px; }
+      button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #719bff; outline-offset: 2px; }
       button:disabled { opacity: .34; cursor: default; }
-      button.primary { background: rgba(76,108,166,.74); border-color: rgba(137,176,241,.44); }
-      button.primary[data-active="true"] { box-shadow: 0 0 0 2px rgba(122,162,247,.18), 0 1px 0 rgba(255,255,255,.09) inset; }
+      button.primary { background: linear-gradient(180deg, rgba(91,137,240,.96), rgba(55,91,196,.96)); border-color: rgba(153,185,255,.58); }
+      button.primary[data-active="true"] { box-shadow: 0 0 0 2px rgba(113,155,255,.2), 0 1px 0 rgba(255,255,255,.12) inset; }
       button.icon-button {
         display: inline-flex;
         align-items: center;
@@ -940,6 +1280,10 @@
       }
       button.icon-button svg { display: block; width: 14px; height: 14px; stroke: currentColor; }
       button.close-button { border-radius: 8px; color: #cbd1d8; }
+      button.density-button { min-width: 78px; padding-inline: 8px; color: #b5bfd2; font-size: 8px; letter-spacing: .045em; }
+      button.pin-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 72px; }
+      button.pin-button[data-active="true"] { color: #bcd0ff; border-color: rgba(113,155,255,.54); background: rgba(69,92,158,.42); }
+      .pin-count { display: inline-grid; place-items: center; min-width: 16px; height: 16px; border-radius: 999px; background: rgba(113,155,255,.18); color: #d8e4ff; font-size: 8px; }
       .workspace {
         display: flex;
         flex-direction: column;
@@ -949,35 +1293,36 @@
       }
       .fixed-stack {
         flex: 0 0 auto;
-        border: 1px solid rgba(255,255,255,.095);
+        border: 1px solid rgba(184,200,255,.14);
         border-radius: 14px;
         overflow: hidden;
-        background: rgba(255,255,255,.025);
-        box-shadow: 0 1px 0 rgba(255,255,255,.025) inset;
+        background: linear-gradient(145deg, rgba(50,59,94,.42), rgba(25,31,51,.34));
+        box-shadow: 0 1px 0 rgba(255,255,255,.045) inset;
       }
       .command-surface { padding: 10px 11px 11px; }
       .target-row { display: flex; align-items: center; gap: 10px; }
-      .eyebrow { color: #7f8996; font-size: 9px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
+      .eyebrow { color: #8692aa; font-size: 9px; font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
       .target-name { display: block; margin-top: 2px; overflow: hidden; color: #f4f6f8; font: 600 13px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; text-overflow: ellipsis; white-space: nowrap; }
-      .status { min-height: 20px; margin-top: 6px; color: #a7afb9; font-size: 10.5px; }
-      .status[data-kind="success"] { color: #a5dcbc; }
+      .status { min-height: 20px; margin-top: 6px; color: #a9b1c2; font-size: 10.5px; }
+      .status[data-kind="success"] { color: #91ddb2; }
       .status[data-kind="error"] { color: #ffb0a8; }
       .command-row { display: grid; grid-template-columns: minmax(0,1fr) 142px auto; gap: 7px; margin-top: 8px; }
       .delay-control { display: grid; grid-template-columns: 43px 1fr; gap: 5px; }
-      .history-controls { display: grid; grid-template-columns: repeat(2, 29px); gap: 5px; }
+      .history-bar { display: grid; grid-template-columns: 29px minmax(0,1fr) 29px; align-items: center; gap: 5px; margin-top: 7px; }
+      .history-select { min-width: 0; font-size: 9px; text-overflow: ellipsis; }
       input, select {
         width: 100%;
         min-height: 31px;
-        border: 1px solid rgba(255,255,255,.12);
+        border: 1px solid rgba(184,200,255,.16);
         border-radius: 8px;
         padding: 5px 8px;
-        background: rgba(8,10,13,.46);
-        color: #edf0f3;
+        background: rgba(10,14,27,.58);
+        color: #edf1f8;
       }
       .hierarchy-surface {
         padding: 9px 10px 10px;
-        border-top: 1px solid rgba(255,255,255,.075);
-        background: rgba(7,9,12,.14);
+        border-top: 1px solid rgba(184,200,255,.11);
+        background: rgba(10,14,28,.2);
       }
       .surface-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
       .surface-title { color: #939ca7; font-size: 9px; font-weight: 700; letter-spacing: .085em; text-transform: uppercase; }
@@ -992,7 +1337,7 @@
         gap: 20px;
         margin-top: 10px;
         padding: 0 4px;
-        border-bottom: 1px solid rgba(255,255,255,.075);
+        border-bottom: 1px solid rgba(184,200,255,.11);
       }
       .tabs button {
         position: relative;
@@ -1001,7 +1346,7 @@
         border-radius: 0;
         padding: 0 1px;
         background: transparent;
-        color: #818b97;
+        color: #8f9ab0;
         box-shadow: none;
         font-size: 10.5px;
       }
@@ -1011,24 +1356,32 @@
         left: 0; right: 0; bottom: -1px;
         height: 2px;
         border-radius: 2px 2px 0 0;
-        background: #8fb4f7;
+        background: #719bff;
         transform: scaleX(0);
         transition: transform 140ms ease;
       }
-      .tabs button[data-active="true"] { color: #edf1f5; }
+      .tabs button[data-active="true"] { color: #f1f3f8; }
       .tabs button[data-active="true"]::after { transform: scaleX(1); }
       .view-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 1px 8px; }
       .tab-panel { margin: 0; }
       .tab-panel[hidden] { display: none; }
       .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
       .section-title { margin: 0; color: #9099a5; font-size: 9px; font-weight: 700; letter-spacing: .085em; text-transform: uppercase; }
-      .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
-      .info-cell { min-width: 0; border-bottom: 1px solid rgba(255,255,255,.065); padding: 7px 2px 8px; }
+      .overview-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+      .overview-section { min-width: 0; border: 1px solid rgba(184,200,255,.11); border-radius: 11px; padding: 10px; background: rgba(39,47,77,.34); }
+      .overview-section-title { margin: 0 0 8px; color: #9ca8bf; font-size: 8.5px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; }
+      .info-grid { display: grid; grid-template-columns: 1fr; gap: 0; }
+      .info-cell { min-width: 0; border-bottom: 1px solid rgba(184,200,255,.085); padding: 6px 0 7px; }
+      .info-cell:last-child { border-bottom: 0; }
       .info-cell.wide { grid-column: 1 / -1; }
-      .info-label { display: block; color: #707a86; font-size: 8.5px; letter-spacing: .055em; text-transform: uppercase; }
-      .info-value { display: block; margin-top: 3px; overflow: hidden; color: #dbe0e6; text-overflow: ellipsis; white-space: nowrap; font: 10.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .info-label { display: block; color: #7f8aa2; font-size: 8.5px; letter-spacing: .055em; text-transform: uppercase; }
+      .info-value { display: block; margin-top: 3px; overflow: hidden; color: #e1e6f0; text-overflow: ellipsis; white-space: nowrap; font: 10.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
       .info-value.wrap { max-height: 68px; overflow: auto; white-space: normal; overflow-wrap: anywhere; }
-      .locator-card { padding: 9px 0 10px; border-bottom: 1px solid rgba(255,255,255,.065); }
+      .geometry-visual { display: grid; place-items: center; min-height: 116px; border: 1px dashed rgba(150,172,245,.27); border-radius: 10px; background: rgba(17,22,42,.35); }
+      .geometry-middle { display: grid; place-items: center; width: 78%; min-height: 82px; border: 1px dashed rgba(150,172,245,.31); border-radius: 9px; }
+      .geometry-core { display: grid; place-items: center; min-width: 74px; min-height: 48px; border: 1px solid rgba(145,171,255,.36); border-radius: 8px; background: rgba(78,105,183,.25); color: #92b4ff; font: 650 12px/1 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .geometry-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
+      .locator-card { padding: 9px 0 10px; border-bottom: 1px solid rgba(184,200,255,.085); }
       .locator-card:first-child { padding-top: 0; }
       .locator-card:last-child { border-bottom: 0; }
       .locator-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
@@ -1040,17 +1393,35 @@
         max-height: 108px;
         margin: 0;
         overflow: auto;
-        border: 1px solid rgba(255,255,255,.07);
+        border: 1px solid rgba(184,200,255,.11);
         border-radius: 8px;
         padding: 8px;
-        background: rgba(5,7,9,.4);
-        color: #d7dce3;
+        background: rgba(7,11,25,.5);
+        color: #dce4f5;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         font: 10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
       }
       .json-toolbar { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 8px; }
       .json-preview { max-height: 380px; }
+      .compare-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+      .compare-note { color: #8d98ae; font-size: 9px; }
+      .compare-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+      .compare-empty { border: 1px dashed rgba(184,200,255,.16); border-radius: 11px; padding: 28px 14px; color: #8792a8; text-align: center; }
+      .compare-card { min-width: 0; border: 1px solid rgba(184,200,255,.13); border-radius: 12px; padding: 10px; background: linear-gradient(145deg, rgba(50,59,94,.38), rgba(21,27,47,.4)); }
+      .compare-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+      .compare-title-wrap { min-width: 0; }
+      .compare-title { display: block; overflow: hidden; color: #f2f5fb; text-overflow: ellipsis; white-space: nowrap; font: 650 11px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .compare-frame { display: block; margin-top: 2px; color: #8793aa; font-size: 8px; }
+      .compare-actions, .compare-locators { display: flex; gap: 5px; }
+      .compare-actions button, .compare-locators button { min-height: 25px; padding: 3px 7px; font-size: 8.5px; }
+      .compare-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 9px; }
+      .compare-field { min-width: 0; border-top: 1px solid rgba(184,200,255,.08); padding-top: 6px; }
+      .compare-field.wide { grid-column: 1 / -1; }
+      .compare-label { display: block; color: #78859f; font-size: 8px; text-transform: uppercase; letter-spacing: .055em; }
+      .compare-value { display: block; margin-top: 3px; overflow: hidden; color: #dce3f0; text-overflow: ellipsis; white-space: nowrap; font: 9.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .compare-value.wrap { max-height: 48px; overflow: auto; white-space: normal; overflow-wrap: anywhere; }
+      .compare-locators { margin-top: 9px; }
       .footer {
         display: flex;
         flex: 0 0 auto;
@@ -1059,18 +1430,48 @@
         gap: 10px;
         margin: 0 -12px;
         padding: 8px 12px 9px;
-        border-top: 1px solid rgba(255,255,255,.065);
-        color: #6f7884;
+        border-top: 1px solid rgba(184,200,255,.085);
+        color: #78849a;
         font-size: 8.5px;
       }
       .local-state { display: inline-flex; align-items: center; gap: 6px; }
-      .local-state::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #6f9f82; box-shadow: 0 0 0 2px rgba(111,159,130,.12); }
+      .local-state::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #77d6a3; box-shadow: 0 0 0 2px rgba(119,214,163,.12); }
       .keycap { border: 1px solid rgba(255,255,255,.11); border-radius: 5px; padding: 1px 5px; background: rgba(255,255,255,.035); color: #949da8; font-size: 8px; }
-      @media (max-width: 540px) {
-        .panel { width: calc(100vw - 20px); top: 10px; right: 10px; max-width: none; }
-        .command-row { grid-template-columns: 1fr 142px auto; }
-        .nav-grid { grid-template-columns: repeat(3, 1fr); }
+      .resize-handle { position: absolute; top: 56px; bottom: 0; z-index: 3; width: 8px; cursor: ew-resize; touch-action: none; }
+      .resize-handle.left { left: -1px; }
+      .resize-handle.right { right: -1px; }
+      .resize-handle::after { content: ''; position: absolute; top: 42%; bottom: 42%; width: 2px; border-radius: 2px; background: rgba(151,174,247,.28); opacity: 0; transition: opacity 120ms ease; }
+      .resize-handle.left::after { left: 1px; }
+      .resize-handle.right::after { right: 1px; }
+      .resize-handle:hover::after, .resize-handle:active::after { opacity: 1; }
+      .panel[data-density="comfortable"] .titlebar { min-height: 60px; padding-block: 12px; }
+      .panel[data-density="comfortable"] .workspace { padding-inline: 15px; }
+      .panel[data-density="comfortable"] .command-surface { padding: 13px 14px 14px; }
+      .panel[data-density="comfortable"] .hierarchy-surface { padding: 12px 13px 13px; }
+      .panel[data-density="comfortable"] button, .panel[data-density="comfortable"] input, .panel[data-density="comfortable"] select { min-height: 35px; }
+      .panel[data-density="comfortable"] .nav-grid button { min-height: 33px; }
+      .panel[data-density="comfortable"] .tabs button { min-height: 39px; }
+      .panel[data-density="comfortable"] .view-scroll { padding-top: 13px; }
+      .panel[data-density="comfortable"] .overview-section, .panel[data-density="comfortable"] .compare-card { padding: 13px; }
+      @container inspector (min-width: 440px) {
+        .overview-grid { grid-template-columns: 1.12fr .9fr .98fr; }
+      }
+      @container inspector (min-width: 620px) {
+        .compare-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
+        .locator-body { grid-template-columns: minmax(0,1fr) 62px; }
+      }
+      @container inspector (min-width: 920px) {
+        .compare-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
+      }
+      @container inspector (max-width: 430px) {
         .frame-pill { display: none; }
+        .command-row { grid-template-columns: minmax(0,1fr) 135px; }
+        .pin-button { grid-column: 1 / -1; }
+        .nav-grid { grid-template-columns: repeat(3, 1fr); }
+        .tabs { gap: 14px; }
+      }
+      @media (max-width: 380px) {
+        .panel { width: calc(100vw - 16px); top: 8px; right: 8px; max-width: none; }
       }
       @media (prefers-reduced-motion: reduce) {
         .panel { animation: none; }
@@ -1079,11 +1480,11 @@
         .highlight-edge { animation-duration: 4s !important; }
       }
       @media (prefers-reduced-transparency: reduce) {
-        .panel { background: #1b1e23; backdrop-filter: none; -webkit-backdrop-filter: none; }
+        .panel { background: #1a1f2e; backdrop-filter: none; -webkit-backdrop-filter: none; }
       }
       @media (prefers-contrast: more) {
-        .panel { background: #111317; border-color: rgba(255,255,255,.38); }
-        .fixed-stack { border-color: rgba(255,255,255,.24); }
+        .panel { background: #0f1117; border-color: rgba(225,232,255,.5); }
+        .fixed-stack, .overview-section, .compare-card { border-color: rgba(225,232,255,.32); }
       }
     `;
     return style;
@@ -1114,6 +1515,7 @@
           <span class="brand-subtitle">v${EXTENSION_VERSION} · drag the header to move</span>
         </div>
         <div class="title-actions">
+          <button class="density-button" type="button" data-action="density" aria-label="表示密度: Compact">COMPACT</button>
           <span class="frame-pill">TOP FRAME</span>
           <span class="mode-pill" data-mode="picking">SELECTING</span>
           <button class="icon-button close-button" type="button" data-action="close" aria-label="閉じる">
@@ -1137,14 +1539,16 @@
                 <input type="number" min="1" max="60" value="${DEFAULT_DELAY_SECONDS}" aria-label="固定までの秒数">
                 <button type="button" data-action="delay">秒後に固定</button>
               </div>
-              <div class="history-controls" aria-label="選択履歴">
-                <button class="icon-button" type="button" data-action="history-back" aria-label="前の選択へ戻る" title="前の選択へ戻る">
-                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.75 3.5L5.25 8l4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
-                <button class="icon-button" type="button" data-action="history-forward" aria-label="次の選択へ進む" title="次の選択へ進む">
-                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.25 3.5L10.75 8l-4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
-              </div>
+              <button class="pin-button" type="button" data-action="pin" aria-pressed="false">Pin <span class="pin-count">0</span></button>
+            </div>
+            <div class="history-bar" aria-label="選択履歴">
+              <button class="icon-button" type="button" data-action="history-back" aria-label="前の選択へ戻る" title="前の選択へ戻る">
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.75 3.5L5.25 8l4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+              <select class="history-select" aria-label="選択履歴"><option value="">履歴なし</option></select>
+              <button class="icon-button" type="button" data-action="history-forward" aria-label="次の選択へ進む" title="次の選択へ進む">
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.25 3.5L10.75 8l-4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
             </div>
           </section>
 
@@ -1167,20 +1571,38 @@
         <nav class="tabs" role="tablist" aria-label="Inspector views">
           <button type="button" role="tab" data-tab="overview" data-active="true">Overview</button>
           <button type="button" role="tab" data-tab="locators" data-active="false">Locators</button>
+          <button type="button" role="tab" data-tab="compare" data-active="false" hidden>Compare</button>
           <button type="button" role="tab" data-tab="json" data-active="false">JSON</button>
         </nav>
 
         <div class="view-scroll">
           <div class="tab-panel" data-panel="overview">
-            <section>
-              <div class="section-head"><h2 class="section-title">Snapshot</h2></div>
-              <div class="info-grid">
-                <div class="info-cell"><span class="info-label">Tag</span><code class="info-value" data-value="tag">未固定</code></div>
-                <div class="info-cell"><span class="info-label">Identity</span><code class="info-value" data-value="identity">—</code></div>
-                <div class="info-cell wide"><span class="info-label">Rect</span><code class="info-value" data-value="rect">—</code></div>
-                <div class="info-cell wide"><span class="info-label">Text</span><code class="info-value wrap" data-value="text">ページ上の要素へポインターを移動してください。</code></div>
-              </div>
-            </section>
+            <div class="overview-grid">
+              <section class="overview-section">
+                <h2 class="overview-section-title">Element details</h2>
+                <div class="info-grid">
+                  <div class="info-cell"><span class="info-label">Tag</span><code class="info-value" data-value="tag">未固定</code></div>
+                  <div class="info-cell"><span class="info-label">Identity</span><code class="info-value wrap" data-value="identity">—</code></div>
+                  <div class="info-cell"><span class="info-label">Text</span><code class="info-value wrap" data-value="text">ページ上の要素へポインターを移動してください。</code></div>
+                </div>
+              </section>
+              <section class="overview-section">
+                <h2 class="overview-section-title">Geometry</h2>
+                <div class="geometry-visual"><div class="geometry-middle"><div class="geometry-core" data-value="geometry-size">—</div></div></div>
+                <div class="geometry-meta">
+                  <div class="info-cell"><span class="info-label">Rect</span><code class="info-value" data-value="rect">—</code></div>
+                  <div class="info-cell"><span class="info-label">Position</span><code class="info-value" data-value="geometry-position">—</code></div>
+                </div>
+              </section>
+              <section class="overview-section">
+                <h2 class="overview-section-title">Frame details</h2>
+                <div class="info-grid">
+                  <div class="info-cell"><span class="info-label">Type</span><code class="info-value" data-value="frame-type">TOP FRAME</code></div>
+                  <div class="info-cell"><span class="info-label">Document</span><code class="info-value wrap" data-value="frame-url">—</code></div>
+                  <div class="info-cell"><span class="info-label">Depth</span><code class="info-value" data-value="frame-depth">0</code></div>
+                </div>
+              </section>
+            </div>
           </div>
 
           <div class="tab-panel" data-panel="locators" hidden>
@@ -1195,6 +1617,16 @@
             <section class="locator-card" data-locator="jsPath">
               <div class="locator-head"><span class="locator-name">JS Path</span><span class="locator-badge">UNAVAILABLE</span></div>
               <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="jsPath">Copy</button></div>
+            </section>
+          </div>
+
+          <div class="tab-panel" data-panel="compare" hidden>
+            <section>
+              <div class="compare-toolbar">
+                <span class="compare-note">最大4件を同時比較</span>
+                <button type="button" data-action="clear-pins">すべて解除</button>
+              </div>
+              <div class="compare-grid"></div>
             </section>
           </div>
 
@@ -1214,6 +1646,8 @@
           <span><span class="keycap">Esc</span> close</span>
         </footer>
       </div>
+      <div class="resize-handle left" data-resize-side="left" role="separator" aria-orientation="vertical" aria-label="パネル左端をリサイズ"></div>
+      <div class="resize-handle right" data-resize-side="right" role="separator" aria-orientation="vertical" aria-label="パネル右端をリサイズ"></div>
     `;
 
     ui.panel = panel;
@@ -1225,10 +1659,17 @@
     ui.pickButton = panel.querySelector('[data-action="pick"]');
     ui.delayInput = panel.querySelector('input[type="number"]');
     ui.delayButton = panel.querySelector('[data-action="delay"]');
+    ui.densityButton = panel.querySelector('[data-action="density"]');
     ui.backButton = panel.querySelector('[data-action="history-back"]');
+    ui.historySelect = panel.querySelector('.history-select');
     ui.forwardButton = panel.querySelector('[data-action="history-forward"]');
+    ui.pinButton = panel.querySelector('[data-action="pin"]');
+    ui.pinCount = panel.querySelector('.pin-count');
     ui.tabButtons = Array.from(panel.querySelectorAll('[data-tab]'));
     ui.tabPanels = Array.from(panel.querySelectorAll('[data-panel]'));
+    ui.compareTabButton = panel.querySelector('[data-tab="compare"]');
+    ui.compareGrid = panel.querySelector('.compare-grid');
+    ui.clearPinsButton = panel.querySelector('[data-action="clear-pins"]');
     ui.parentButton = panel.querySelector('[data-nav="parent"]');
     ui.previousButton = panel.querySelector('[data-nav="previous"]');
     ui.nextButton = panel.querySelector('[data-nav="next"]');
@@ -1241,6 +1682,11 @@
     ui.identityValue = panel.querySelector('[data-value="identity"]');
     ui.rectValue = panel.querySelector('[data-value="rect"]');
     ui.textValue = panel.querySelector('[data-value="text"]');
+    ui.geometrySizeValue = panel.querySelector('[data-value="geometry-size"]');
+    ui.geometryPositionValue = panel.querySelector('[data-value="geometry-position"]');
+    ui.frameTypeValue = panel.querySelector('[data-value="frame-type"]');
+    ui.frameUrlValue = panel.querySelector('[data-value="frame-url"]');
+    ui.frameDepthValue = panel.querySelector('[data-value="frame-depth"]');
     ui.cssValue = panel.querySelector('[data-locator="css"] .code-box');
     ui.cssBadge = panel.querySelector('[data-locator="css"] .locator-badge');
     ui.xpathValue = panel.querySelector('[data-locator="xpath"] .code-box');
@@ -1260,8 +1706,15 @@
     panel.querySelector('[data-action="close"]').addEventListener('click', () => sendTopCommand('DEACTIVATE'));
     ui.pickButton.addEventListener('click', beginPicking);
     ui.delayButton.addEventListener('click', toggleCountdown);
+    ui.densityButton.addEventListener('click', toggleDensity);
     ui.backButton.addEventListener('click', () => navigateHistory(-1));
+    ui.historySelect.addEventListener('change', () => {
+      const targetIndex = Number.parseInt(ui.historySelect.value, 10);
+      if (Number.isInteger(targetIndex)) navigateHistoryToIndex(targetIndex);
+    });
     ui.forwardButton.addEventListener('click', () => navigateHistory(1));
+    ui.pinButton.addEventListener('click', toggleCurrentPin);
+    ui.clearPinsButton.addEventListener('click', clearPins);
     panel.querySelector('[data-action="copy-json"]').addEventListener('click', copyJson);
     panel.querySelector('[data-action="save-json"]').addEventListener('click', downloadJson);
     for (const button of ui.tabButtons) {
@@ -1279,6 +1732,26 @@
       button.addEventListener('click', () => copyLocator(button.dataset.copy));
     }
 
+    ui.compareGrid.addEventListener('click', event => {
+      const button = event.target.closest?.('[data-pin-action]');
+      const card = button?.closest?.('[data-pin-id]');
+      if (!button || !card) return;
+      const pinId = card.dataset.pinId;
+      if (button.dataset.pinAction === 'restore') restorePinnedSelection(pinId);
+      else if (button.dataset.pinAction === 'remove') removePin(pinId);
+      else if (button.dataset.pinAction === 'copy-locator') {
+        copyPinnedLocator(pinId, button.dataset.locatorKind);
+      }
+    });
+
+    for (const handle of panel.querySelectorAll('[data-resize-side]')) {
+      handle.addEventListener('pointerdown', beginPanelResize);
+      handle.addEventListener('pointermove', resizePanel);
+      handle.addEventListener('pointerup', endPanelResize);
+      handle.addEventListener('pointercancel', endPanelResize);
+    }
+
+    setDensity(ui.density);
     renderUI();
     return panel;
   }
@@ -1326,16 +1799,18 @@
     frameState.marker = null;
     frameState.childFrameRequests.clear();
     frameState.selectionRegistry.clear();
+    frameState.pinnedSelectionIds.clear();
     clearUICountdown();
     for (const key of Object.keys(ui)) {
       if (['activeTab'].includes(key)) continue;
-      if (key === 'tabButtons' || key === 'tabPanels' || key === 'history') ui[key] = [];
+      if (key === 'tabButtons' || key === 'tabPanels' || key === 'history' || key === 'pins') ui[key] = [];
       else if (key === 'countdownTimer') ui[key] = null;
       else if (key === 'countdownDeadline' || key === 'countdownRemaining') ui[key] = 0;
       else if (key === 'historyIndex') ui[key] = -1;
       else ui[key] = null;
     }
     ui.activeTab = 'overview';
+    ui.density = 'compact';
   }
 
   function setActive(active) {
@@ -1413,6 +1888,14 @@
     }
     if (command === 'RESTORE_SELECTION') {
       restoreSelection(message.selectionId);
+      return;
+    }
+    if (command === 'PIN_SELECTION') {
+      if (message.selectionId) frameState.pinnedSelectionIds.add(message.selectionId);
+      return;
+    }
+    if (command === 'UNPIN_SELECTION') {
+      if (message.selectionId) frameState.pinnedSelectionIds.delete(message.selectionId);
     }
   }
 

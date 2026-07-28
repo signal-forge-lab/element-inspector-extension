@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.8.1`
+`0.8.2`
 
 ## 構成
 
@@ -39,6 +39,8 @@ Top frame content.js
 ├─ UI state
 ├─ countdown
 ├─ selection history
+├─ pinned snapshots / comparison
+├─ panel resize / density
 ├─ export
 └─ frame result aggregation
 
@@ -107,7 +109,10 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 - Inspectorウィンドウ生成
 - Overview / Locators / JSONタブ
 - 固定Hierarchy領域
-- 選択履歴の戻る・進む
+- 選択履歴の戻る・進む・直接選択
+- 最大4件のピン留め比較
+- パネル横幅リサイズ
+- Compact / Comfortable密度切替
 - 遅延固定カウント
 - Locator単体コピー
 - JSONコピー・保存
@@ -180,9 +185,10 @@ getNavigationState(element)
 - ヘッダドラッグはPointer Captureで1:1追従
 - ドラッグ中にtransitionを使用しない
 - UIの出現アニメーションは短く、入力をロックしない
-- 半透明Materialは階層表現に限定
+- C.Glassパレットの半透明Materialは階層表現に限定
+- パネルは濃いブルーグレー、アクセントは`#719BFF`、成功状態は`#77D6A3`
 - Current TargetとHierarchyを固定操作領域へ集約
-- Overview / Locators / JSONは結果表示専用の軽量タブへ分離
+- Overview / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
 - タブは囲み型セグメントではなく下線型
 - フレーム情報と選択状態をヘッダへ集約
 - 閉じるアイコンはSVGをinline-flex中央配置
@@ -198,7 +204,8 @@ getNavigationState(element)
 {
   selectionId,
   frameId,
-  result
+  result,
+  reason
 }
 ```
 
@@ -215,6 +222,57 @@ Top UI
 ```
 
 新規選択時は現在位置より後ろの履歴を削除します。復元対象がDOMから削除されている場合は履歴位置を変更せず、エラー状態を返します。履歴とElement参照はInspector終了時に破棄します。
+
+履歴ドロップダウンは`historyIndex`を選択値として使用し、直接移動も戻る・進むと同じ`RESTORE_SELECTION`経路へ統一します。
+
+## ピン留め比較
+
+トップフレームUIは最大4件のピンを保持します。
+
+```js
+{
+  pinId,
+  selectionId,
+  frameId,
+  result
+}
+```
+
+`result`はピン時点のスナップショットです。比較表示はDOMの存否に依存せず、再選択だけがElement参照を必要とします。
+
+各フレームは`pinnedSelectionIds: Set<selectionId>`を保持します。`selectionRegistry`の上限整理ではピン中の参照を削除対象から除外します。
+
+```text
+Top UI
+↓ PIN_SELECTION / UNPIN_SELECTION
+Background
+↓ FRAME_COMMAND(targetFrameId)
+Target frame
+↓ pinnedSelectionIds更新
+```
+
+再選択には履歴と同じ`RESTORE_SELECTION`を使用します。iframe削除時はBackgroundがトップUIへ失敗状態を返します。
+
+## パネルリサイズと表示密度
+
+左右のリサイズハンドルはPointer Captureで横幅を1:1追従します。
+
+```text
+最小幅: min(360px, viewport - 16px)
+初期幅: 468px
+最大幅: viewport - 16px
+```
+
+リサイズ開始時に`right: auto`へ切り替え、現在の`left`と`width`を固定値へ変換します。左ハンドルは右端を、右ハンドルは左端を基準に幅を計算します。
+
+密度は`panel.dataset.density`で切り替えます。
+
+```text
+compact
+comfortable
+```
+
+どちらもメモリ内状態だけで、Inspector終了時に`compact`へ戻します。結果レイアウトはCSS Container Queriesでパネル幅に追従します。
 
 ## 強調枠
 
@@ -263,6 +321,7 @@ fixed
 - Storage APIを使用しない
 - 対象DOMへ永続的な属性やstyleを追加しない
 - 結果をBackgroundへ永続保存しない
+- パネル幅・密度・履歴・ピンをStorageへ保存しない
 - iframe context handshakeはフレーム経路だけを扱う
 - クリップボード・ダウンロードはユーザー操作時だけ実行する
 
@@ -283,7 +342,9 @@ npm test
 - Background routing契約
 - iframe context handshake
 - 新UIのタブ・ドラッグ・Reduced Motion
-- 固定Hierarchy、選択履歴、SVG閉じるアイコン
+- 固定Hierarchy、履歴一覧、SVG閉じるアイコン
+- C.Glassトークン、横幅リサイズ、密度切替
+- ピン留め上限、比較タブ、iframe間ピン参照保護
 - 外部通信と永続保存の不在
 
 ## 手動確認項目
@@ -302,6 +363,7 @@ npm test
 - 最初と最後の子
 - 子一覧選択
 - 履歴の戻る・進む
+- 履歴一覧からの直接移動
 - 戻ったあとに新規選択して進む履歴が破棄されること
 - iframe削除後の履歴復元エラー
 - 対象削除時の復帰
@@ -318,6 +380,12 @@ npm test
 
 - ヘッダドラッグ
 - SVG閉じるアイコンの中央揃え
+- 左右端からの横幅リサイズ
+- Compact / Comfortable切替
+- 360px付近と620px以上でのレイアウト変化
+- Compareの1列・2列表示
+- 4件ピン留めと5件目の拒否
+- ピン対象削除後もスナップショットが残ること
 - Hierarchyが全タブで常時表示されること
 - TOP FRAME / iframeバッジがヘッダ内に収まること
 - 小さいビューポート

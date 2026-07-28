@@ -197,7 +197,7 @@
               kind: 'status',
               status: 'error',
               historyRestoreFailed: true,
-              message: '履歴のiframeはすでにページから削除されています。'
+              message: '保存した選択対象のiframeはすでにページから削除されています。'
             });
             sendResponse({ ok: false, error });
             return;
@@ -205,6 +205,28 @@
           sendResponse({ ok: true });
         });
         return true;
+      }
+
+      if (command === 'PIN_SELECTION' || command === 'UNPIN_SELECTION') {
+        if (!Number.isInteger(message.targetFrameId) || typeof message.selectionId !== 'string') {
+          sendResponse({ ok: false, error: 'invalid pin target' });
+          return false;
+        }
+        sendToFrame(tabId, message.targetFrameId, {
+          type: MESSAGE.FRAME_COMMAND,
+          command,
+          selectionId: message.selectionId
+        }, (_response, error) => {
+          if (error) {
+            sendTopEvent(tabId, {
+              kind: 'status',
+              status: 'error',
+              message: 'ピン留め対象のフレームへ接続できませんでした。'
+            });
+          }
+        });
+        sendResponse({ ok: true });
+        return false;
       }
     }
 
