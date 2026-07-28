@@ -2,6 +2,17 @@
 
 Chromeのツールバーから起動し、ページ上のDOM要素を視覚的に選択して、Locator・階層・Styles・Accessibility・一時CSS編集・DOMスナップショットを確認、コピー、保存するChrome拡張です。
 
+## 名称とブランドコンセプト
+
+```text
+Prismora
+Web Element Inspector
+```
+
+読みは「プリズモラ」です。
+
+> Prismを核に、光彩と広がりを感じさせる響きを加えた造語。Web要素を複数の観点へ分解し、可視化するInspectorを表す。
+
 ## 現在のバージョン
 
 `0.12.0`
