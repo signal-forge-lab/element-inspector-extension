@@ -267,7 +267,7 @@ Handler previewは最大320文字です。`addEventListener()`、フレームワ
 - UIの出現アニメーションは短く、入力をロックしない
 - Calm Hybridの明るい半透明Materialは外枠と操作面に限定
 - データ表示面は濃いグラファイト、虹色はフォーカス境界、選択タブ、要素強調枠へ限定
-- メインアイコンはZIP内の256px透過PNGを正本として、形状を変更せずサイズ別PNGへ縮小
+- メインアイコンは指定された256px透過PNGを正本として、形状を変更せずサイズ別PNGへ縮小
 - 基本文字は`#20262D`、補助文字は`#68727E`、成功状態は`#4F8A68`
 - Current TargetとHierarchyを固定操作領域へ集約
 - Overview / Styles / Edit / A11y / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
@@ -477,7 +477,7 @@ npm test
 - 新UIのタブ・ドラッグ・Reduced Motion
 - 固定Hierarchy、履歴一覧、SVG閉じるアイコン
 - Calm Hybridトークン、サイズ別PNGアイコン、全方向下側リサイズ、密度切替
-- ZIP内原画と同一SHA-256の256pxメインアイコン、サイズ別PNG
+- 指定原画と同一SHA-256の256pxメインアイコン、サイズ別PNG
 - nested open Shadow DOM、Host境界移動、Shadow JS Path
 - Computed Style、Box Model、Stylesタブ
 - 一時CSS編集、Undo、対象Reset、全frame Reset、終了時撤去

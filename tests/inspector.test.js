@@ -509,7 +509,7 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.equal(iconSource.readUInt32BE(20), 256);
   assert.equal(
     crypto.createHash('sha256').update(iconSource).digest('hex'),
-    '95bb6705a15c7adf35733ccbf2fcfe360f6c74bf399c3f39bf02d2f0a1744735'
+    'd1938fae57b4065040e551d6ac8b83ee2b92fe86a6d990319513772744448353'
   );
   assert.deepEqual(manifest.permissions, ['clipboardWrite']);
   assert.equal(manifest.content_scripts[0].all_frames, true);
