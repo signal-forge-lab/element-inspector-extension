@@ -8,6 +8,10 @@
   const MAX_CHILD_SUMMARIES = 80;
   const MAX_EVENT_HANDLER_PREVIEW = 320;
   const MAX_CUSTOM_PROPERTIES = 200;
+  const VOID_ELEMENT_NAMES = new Set([
+    'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
+    'link', 'meta', 'param', 'source', 'track', 'wbr'
+  ]);
   const DOM0_EVENT_PROPERTIES = Object.freeze([
     'onclick', 'ondblclick', 'oncontextmenu',
     'oninput', 'onchange', 'onsubmit', 'onreset',
@@ -541,6 +545,82 @@
     return ancestors;
   }
 
+  function escapeHtmlAttribute(value) {
+    return String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function createShallowOuterHTML(element) {
+    if (!isDomElement(element)) return '';
+    const tagName = getTagName(element);
+    const attributes = Array.from(element.attributes || [])
+      .map(attribute => ` ${attribute.name}="${escapeHtmlAttribute(attribute.value)}"`)
+      .join('');
+    const openingTag = `<${tagName}${attributes}>`;
+    return VOID_ELEMENT_NAMES.has(tagName)
+      ? openingTag
+      : `${openingTag}…</${tagName}>`;
+  }
+
+  function inspectElementDetail(element) {
+    if (!isDomElement(element)) throw new Error('対象要素を取得できません');
+    const css = generateCssLocator(element);
+    const xpath = generateXPathLocator(element);
+    return {
+      tagName: getTagName(element),
+      attributes: attributesToObject(element),
+      text: normalizeText(element.textContent),
+      rect: getRoundedRect(element),
+      shallowOuterHTML: createShallowOuterHTML(element),
+      locators: {
+        css,
+        xpath,
+        jsPath: generateJsPath(element, css)
+      },
+      computedStyles: collectComputedStyles(element),
+      boxModel: collectBoxModel(element),
+      accessibility: collectAccessibility(element),
+      events: collectEventInfo(element),
+      shadow: collectShadowContext(element)
+    };
+  }
+
+  function buildAncestorExport(selected, options = {}) {
+    if (!isDomElement(selected)) throw new Error('対象要素を取得できません');
+    const ancestorLimit = Number.isInteger(options.maxAncestorDepth)
+      ? Math.max(1, options.maxAncestorDepth)
+      : DEFAULT_MAX_ANCESTOR_DEPTH;
+    const navigation = getNavigationState(selected);
+    const ancestors = [];
+    let current = getComposedParent(selected);
+
+    for (let depth = 1; current && depth <= ancestorLimit; depth += 1) {
+      ancestors.push({
+        depth,
+        relation: depth === 1 ? 'parent' : 'ancestor',
+        ...inspectElementDetail(current)
+      });
+      current = getComposedParent(current);
+    }
+
+    return {
+      exportProfile: 'ancestor-detail',
+      selected: inspectElementDetail(selected),
+      directChildren: navigation.children,
+      ancestors,
+      scope: {
+        ancestorLimit,
+        ancestorCount: ancestors.length,
+        directChildCount: navigation.childCount,
+        directChildrenTruncated: navigation.childrenTruncated,
+        descendantsIncluded: false
+      }
+    };
+  }
+
   function cssEscapeIdentifier(value) {
     if (globalThis.CSS?.escape) return globalThis.CSS.escape(String(value));
     return String(value)
@@ -941,6 +1021,9 @@
     collectBoxModel,
     collectAccessibility,
     collectEventInfo,
+    createShallowOuterHTML,
+    inspectElementDetail,
+    buildAncestorExport,
     summarizeElement,
     inspectElement
   });

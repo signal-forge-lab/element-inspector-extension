@@ -206,6 +206,31 @@
         return false;
       }
 
+      if (command === 'REQUEST_ANCESTOR_EXPORT') {
+        if (!Number.isInteger(state.selectedFrameId) || typeof message.selectionId !== 'string') {
+          sendResponse({ ok: false, error: 'invalid ancestor export target' });
+          return false;
+        }
+        sendToFrame(tabId, state.selectedFrameId, {
+          type: MESSAGE.FRAME_COMMAND,
+          command,
+          selectionId: message.selectionId
+        }, (_response, error) => {
+          if (error) {
+            sendTopEvent(tabId, {
+              kind: 'status',
+              status: 'error',
+              ancestorExportFailed: true,
+              message: '先祖詳細を取得するフレームへ接続できませんでした。'
+            });
+            sendResponse({ ok: false, error });
+            return;
+          }
+          sendResponse({ ok: true });
+        });
+        return true;
+      }
+
       if (command === 'RESTORE_SELECTION') {
         if (!Number.isInteger(message.targetFrameId) || typeof message.selectionId !== 'string') {
           sendResponse({ ok: false, error: 'invalid history target' });

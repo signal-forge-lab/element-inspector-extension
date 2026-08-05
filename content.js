@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.0';
+  const EXTENSION_VERSION = '0.14.1';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -153,6 +153,12 @@
     xpathBadge: null,
     jsPathValue: null,
     jsPathBadge: null,
+    jsonProfileButtons: [],
+    jsonScope: null,
+    jsonScopeAncestors: null,
+    jsonScopeChildren: null,
+    jsonCopyButton: null,
+    jsonSaveButton: null,
     jsonPreview: null,
     result: null,
     selectedFrameId: null,
@@ -167,6 +173,9 @@
     historyIndex: -1,
     pendingHistoryIndex: null,
     currentSelectionId: null,
+    jsonProfile: 'standard',
+    ancestorExport: null,
+    ancestorExportPending: false,
     pins: []
   };
 
@@ -539,6 +548,98 @@
       cssText: record?.declarations.size ? copiedRuleText(record) : '',
       allCssText: activeRecords.map(copiedRuleText).join('\n\n')
     };
+  }
+
+  function buildTemporaryEditDetailSnapshot(element) {
+    const snapshot = buildTemporaryEditSnapshot(element);
+    return {
+      active: snapshot.active,
+      targetId: snapshot.targetId,
+      declarations: snapshot.declarations,
+      currentValues: snapshot.currentValues,
+      cssText: snapshot.cssText
+    };
+  }
+
+  function sanitizeAncestorExportDetail(detail) {
+    if (!detail) return detail;
+    const attributeName = frameState.editAttributeName;
+    if (detail.attributes && Object.prototype.hasOwnProperty.call(detail.attributes, attributeName)) {
+      delete detail.attributes[attributeName];
+    }
+    for (const host of detail.shadow?.hosts || []) {
+      if (host.attributes && Object.prototype.hasOwnProperty.call(host.attributes, attributeName)) {
+        delete host.attributes[attributeName];
+      }
+    }
+    const pattern = new RegExp(`\\s${attributeName}="[^"]*"`, 'g');
+    detail.shallowOuterHTML = String(detail.shallowOuterHTML || '').replace(pattern, '');
+    return detail;
+  }
+
+  function buildAncestorExportSnapshot() {
+    const selected = frameState.selectedElement;
+    if (!isElement(selected) || !selected.isConnected) {
+      throw new Error('固定中の対象要素がありません。');
+    }
+    if (!globalThis.ElementInspector?.buildAncestorExport) {
+      throw new Error('先祖詳細の解析モジュールを利用できません。');
+    }
+    const snapshot = globalThis.ElementInspector.buildAncestorExport(selected, {
+      maxAncestorDepth: 8
+    });
+    const frame = buildFrameInfo();
+    const locatorContext = {
+      frameRelative: !frameState.isTopFrame,
+      frameId: frameState.frameId,
+      framePath: frameState.frameContext.path,
+      shadowDepth: 0
+    };
+    const enrich = (detail, element) => {
+      detail.frame = { ...frame, path: [...frame.path] };
+      detail.temporaryEdits = buildTemporaryEditDetailSnapshot(element);
+      detail.locators.context = {
+        ...locatorContext,
+        shadowDepth: detail.shadow?.depth || 0
+      };
+      return sanitizeAncestorExportDetail(detail);
+    };
+
+    enrich(snapshot.selected, selected);
+    let ancestorElement = globalThis.ElementInspector.getComposedParent(selected);
+    for (const ancestor of snapshot.ancestors) {
+      if (!isElement(ancestorElement)) break;
+      enrich(ancestor, ancestorElement);
+      ancestorElement = globalThis.ElementInspector.getComposedParent(ancestorElement);
+    }
+    snapshot.capturedAt = new Date().toISOString();
+    return snapshot;
+  }
+
+  function emitAncestorExport(selectionId) {
+    if (selectionId !== frameState.currentSelectionId) {
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        ancestorExportFailed: true,
+        message: '選択対象が更新されたため、先祖詳細を再取得してください。'
+      });
+      return;
+    }
+    try {
+      emitFrameEvent({
+        kind: 'ancestorExport',
+        selectionId,
+        result: buildAncestorExportSnapshot()
+      });
+    } catch (error) {
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        ancestorExportFailed: true,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
   }
 
   function refreshSelectedAfterEdit(reason, statusMessage) {
@@ -1407,7 +1508,7 @@
       setLocatorView(ui.cssValue, ui.cssBadge, null, false);
       setLocatorView(ui.xpathValue, ui.xpathBadge, null, false);
       setLocatorView(ui.jsPathValue, ui.jsPathBadge, null, false);
-      ui.jsonPreview.textContent = '固定した要素のJSONがここに表示されます。';
+      renderJsonView();
       renderStylesView(null);
       renderEditView(null);
       renderAccessibilityView(null);
@@ -1436,7 +1537,7 @@
     setLocatorView(ui.cssValue, ui.cssBadge, result.locators?.css, frameRelative);
     setLocatorView(ui.xpathValue, ui.xpathBadge, result.locators?.xpath, frameRelative);
     setLocatorView(ui.jsPathValue, ui.jsPathBadge, result.locators?.jsPath, frameRelative);
-    ui.jsonPreview.textContent = JSON.stringify(result, null, 2);
+    renderJsonView();
     renderStylesView(result);
     renderEditView(result);
     renderAccessibilityView(result);
@@ -1661,22 +1762,97 @@
     }
   }
 
+  function currentJsonPayload() {
+    return ui.jsonProfile === 'ancestor-detail' ? ui.ancestorExport : ui.result;
+  }
+
+  function renderJsonView() {
+    const hasResult = Boolean(ui.result);
+    const isAncestorProfile = ui.jsonProfile === 'ancestor-detail';
+    for (const button of ui.jsonProfileButtons) {
+      const active = button.dataset.jsonProfile === ui.jsonProfile;
+      button.dataset.active = active ? 'true' : 'false';
+      button.setAttribute('aria-pressed', String(active));
+    }
+    if (ui.jsonScope) ui.jsonScope.hidden = !isAncestorProfile;
+    if (ui.jsonScopeAncestors) {
+      const scope = ui.ancestorExport?.scope;
+      ui.jsonScopeAncestors.textContent = scope
+        ? `${scope.ancestorCount} / ${scope.ancestorLimit}`
+        : 'Up to 8';
+    }
+    if (ui.jsonScopeChildren) {
+      const scope = ui.ancestorExport?.scope;
+      ui.jsonScopeChildren.textContent = scope
+        ? `${scope.directChildCount}${scope.directChildrenTruncated ? '+' : ''} · Summary only`
+        : 'Summary only';
+    }
+
+    const payload = currentJsonPayload();
+    const unavailable = !payload || (isAncestorProfile && ui.ancestorExportPending);
+    if (ui.jsonCopyButton) ui.jsonCopyButton.disabled = unavailable;
+    if (ui.jsonSaveButton) ui.jsonSaveButton.disabled = unavailable;
+    if (!ui.jsonPreview) return;
+    if (!hasResult) {
+      ui.jsonPreview.textContent = '固定した要素のJSONがここに表示されます。';
+      return;
+    }
+    if (isAncestorProfile && ui.ancestorExportPending) {
+      ui.jsonPreview.textContent = 'Ancestor detail JSONを生成しています…';
+      return;
+    }
+    if (isAncestorProfile && !ui.ancestorExport) {
+      ui.jsonPreview.textContent = 'Ancestor detail JSONはまだ生成されていません。';
+      return;
+    }
+    ui.jsonPreview.textContent = JSON.stringify(payload, null, 2);
+  }
+
+  function requestAncestorExport() {
+    if (!ui.result || !ui.currentSelectionId || ui.ancestorExportPending) return;
+    ui.ancestorExport = null;
+    ui.ancestorExportPending = true;
+    renderJsonView();
+    sendTopCommand('REQUEST_ANCESTOR_EXPORT', {
+      selectionId: ui.currentSelectionId
+    });
+  }
+
+  function setJsonProfile(profile) {
+    ui.jsonProfile = profile === 'ancestor-detail' ? 'ancestor-detail' : 'standard';
+    renderJsonView();
+    if (ui.jsonProfile === 'ancestor-detail' && ui.result && !ui.ancestorExport) {
+      requestAncestorExport();
+    }
+  }
+
   async function copyJson() {
-    if (!ui.result) return;
+    const payload = currentJsonPayload();
+    if (!payload) return;
     try {
-      await copyText(JSON.stringify(ui.result, null, 2));
-      setUIStatus('JSONをクリップボードへコピーしました。', 'success');
+      await copyText(JSON.stringify(payload, null, 2));
+      setUIStatus(
+        ui.jsonProfile === 'ancestor-detail'
+          ? '先祖詳細JSONをクリップボードへコピーしました。'
+          : 'JSONをクリップボードへコピーしました。',
+        'success'
+      );
     } catch (error) {
       setUIStatus(error instanceof Error ? error.message : String(error), 'error');
     }
   }
 
   function downloadJson() {
-    if (!ui.result) return;
-    const tag = ui.result.selectedTag || 'element';
+    const payload = currentJsonPayload();
+    if (!payload) return;
+    const tag = ui.jsonProfile === 'ancestor-detail'
+      ? payload.selected?.tagName || 'element'
+      : payload.selectedTag || 'element';
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `prismora-${tag}-${stamp}.json`;
-    const blob = new Blob([JSON.stringify(ui.result, null, 2)], { type: 'application/json' });
+    const filename = ui.jsonProfile === 'ancestor-detail'
+      ? `prismora-ancestors-${tag}-${stamp}.json`
+      : `prismora-${tag}-${stamp}.json`;
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     anchor.setAttribute(ROOT_ATTRIBUTE, 'download');
@@ -1692,6 +1868,15 @@
 
   function handleTopEvent(event) {
     if (!ui.panel || !event) return;
+
+    if (event.kind === 'ancestorExport') {
+      if (event.selectionId !== ui.currentSelectionId || !event.result) return;
+      ui.ancestorExportPending = false;
+      ui.ancestorExport = event.result;
+      renderJsonView();
+      setUIStatus('先祖詳細JSONを生成しました。', 'success');
+      return;
+    }
 
     if (event.kind === 'hover') {
       ui.targetName.textContent = event.summary?.label || 'Hovered element';
@@ -1718,14 +1903,22 @@
       ui.result = event.result;
       ui.selectedFrameId = event.frameId;
       ui.currentSelectionId = event.selectionId || null;
+      ui.ancestorExport = null;
+      ui.ancestorExportPending = false;
       setUIMode('fixed');
       setUIStatus(event.statusMessage || `${event.reason || '選択'}で対象を固定しました。`, 'success');
       renderUI();
+      if (ui.jsonProfile === 'ancestor-detail') requestAncestorExport();
       return;
     }
 
     if (event.kind === 'status') {
       if (event.historyRestoreFailed) ui.pendingHistoryIndex = null;
+      if (event.ancestorExportFailed) {
+        ui.ancestorExportPending = false;
+        ui.ancestorExport = null;
+        renderJsonView();
+      }
       setUIStatus(event.message || '状態を更新しました。', event.status || 'normal');
       renderUI();
     }
@@ -2299,6 +2492,19 @@
         overflow-wrap: anywhere;
         font: 10px/1.45 ui-monospace,SFMono-Regular,Consolas,monospace;
       }
+      .json-profile-card { margin-bottom: 8px; border: 1px solid var(--ei-line); border-radius: 11px; padding: 10px; background: var(--ei-surface); }
+      .json-profile-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .json-profile-label { color: var(--ei-faint); font-size: 8.5px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; }
+      .json-profile-control { display: inline-flex; align-items: center; gap: 2px; border: 1px solid var(--ei-line); border-radius: 9px; padding: 2px; background: rgba(32,38,45,.045); }
+      button.json-profile-option { min-height: 27px; border: 0; border-radius: 6px; padding: 0 9px; background: transparent; color: #69737e; box-shadow: none; font-size: 8px; font-weight: 700; }
+      button.json-profile-option[data-active="false"]:hover:not(:disabled) { background: rgba(255,255,255,.7); }
+      button.json-profile-option[data-active="true"] { background: var(--ei-graphite); color: #f7f8fa; }
+      button.json-profile-option[data-active="true"]:hover:not(:disabled) { background: #303943; color: #f7f8fa; }
+      .json-scope { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 6px; margin-top: 9px; }
+      .json-scope[hidden] { display: none; }
+      .json-scope-item { min-width: 0; border: 1px solid rgba(32,38,45,.08); border-radius: 8px; padding: 7px 8px; background: rgba(32,38,45,.028); }
+      .json-scope-item span { display: block; color: var(--ei-faint); font-size: 7.5px; letter-spacing: .055em; text-transform: uppercase; }
+      .json-scope-item code { display: block; margin-top: 3px; overflow: hidden; color: #29313a; text-overflow: ellipsis; white-space: nowrap; font: 9px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
       .json-toolbar { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 8px; }
       .json-preview { max-height: 380px; }
       .compare-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
@@ -2411,6 +2617,9 @@
         .command-row { grid-template-columns: minmax(0,1fr) 135px; }
         .pin-button { grid-column: 1 / -1; }
         .history-bar { grid-template-columns: 68px minmax(0,1fr) 68px; }
+        .json-profile-head { align-items: stretch; flex-direction: column; }
+        .json-profile-control { display: grid; grid-template-columns: 1fr 1fr; }
+        .json-scope { grid-template-columns: 1fr; }
         .nav-grid { grid-template-columns: repeat(3, 1fr); }
         .tabs { gap: 14px; }
         .styles-toolbar { grid-template-columns: 1fr; gap: 4px; }
@@ -2742,6 +2951,20 @@
 
           <div class="tab-panel" data-panel="json" hidden>
             <section>
+              <div class="json-profile-card">
+                <div class="json-profile-head">
+                  <span class="json-profile-label">Export profile</span>
+                  <div class="json-profile-control" role="group" aria-label="JSON出力プロファイル">
+                    <button class="json-profile-option" type="button" data-json-profile="standard" data-active="true" aria-pressed="true">Standard</button>
+                    <button class="json-profile-option" type="button" data-json-profile="ancestor-detail" data-active="false" aria-pressed="false">Ancestor detail</button>
+                  </div>
+                </div>
+                <div class="json-scope" hidden>
+                  <div class="json-scope-item"><span>Ancestors</span><code data-json-scope="ancestors">Up to 8</code></div>
+                  <div class="json-scope-item"><span>Direct children</span><code data-json-scope="children">Summary only</code></div>
+                  <div class="json-scope-item"><span>Descendants</span><code>Excluded</code></div>
+                </div>
+              </div>
               <div class="json-toolbar">
                 <button type="button" data-action="copy-json">JSONをコピー</button>
                 <button type="button" data-action="save-json">JSONを保存</button>
@@ -2845,6 +3068,12 @@
     ui.xpathBadge = panel.querySelector('[data-locator="xpath"] .locator-badge');
     ui.jsPathValue = panel.querySelector('[data-locator="jsPath"] .code-box');
     ui.jsPathBadge = panel.querySelector('[data-locator="jsPath"] .locator-badge');
+    ui.jsonProfileButtons = Array.from(panel.querySelectorAll('[data-json-profile]'));
+    ui.jsonScope = panel.querySelector('.json-scope');
+    ui.jsonScopeAncestors = panel.querySelector('[data-json-scope="ancestors"]');
+    ui.jsonScopeChildren = panel.querySelector('[data-json-scope="children"]');
+    ui.jsonCopyButton = panel.querySelector('[data-action="copy-json"]');
+    ui.jsonSaveButton = panel.querySelector('[data-action="save-json"]');
     ui.jsonPreview = panel.querySelector('.json-preview');
 
     ui.header.addEventListener('pointerdown', beginPanelDrag);
@@ -2879,8 +3108,11 @@
     ui.editResetCurrentButton.addEventListener('click', () => sendTopCommand('RESET_CURRENT_EDITS'));
     ui.editResetAllButton.addEventListener('click', () => sendTopCommand('RESET_ALL_EDITS'));
     ui.editCopyCssButton.addEventListener('click', copyTemporaryEditCss);
-    panel.querySelector('[data-action="copy-json"]').addEventListener('click', copyJson);
-    panel.querySelector('[data-action="save-json"]').addEventListener('click', downloadJson);
+    for (const button of ui.jsonProfileButtons) {
+      button.addEventListener('click', () => setJsonProfile(button.dataset.jsonProfile));
+    }
+    ui.jsonCopyButton.addEventListener('click', copyJson);
+    ui.jsonSaveButton.addEventListener('click', downloadJson);
     for (const button of ui.tabButtons) {
       button.addEventListener('click', () => setActiveTab(button.dataset.tab));
     }
@@ -2969,7 +3201,7 @@
     clearUICountdown();
     for (const key of Object.keys(ui)) {
       if (['activeTab'].includes(key)) continue;
-      if (key === 'densityButtons' || key === 'tabButtons' || key === 'tabPanels' || key === 'history' || key === 'pins') ui[key] = [];
+      if (key === 'densityButtons' || key === 'tabButtons' || key === 'tabPanels' || key === 'jsonProfileButtons' || key === 'history' || key === 'pins') ui[key] = [];
       else if (key === 'countdownTimer') ui[key] = null;
       else if (key === 'countdownDeadline' || key === 'countdownRemaining') ui[key] = 0;
       else if (key === 'historyIndex') ui[key] = -1;
@@ -2977,6 +3209,9 @@
     }
     ui.activeTab = 'overview';
     ui.density = 'compact';
+    ui.jsonProfile = 'standard';
+    ui.ancestorExport = null;
+    ui.ancestorExportPending = false;
   }
 
   function setActive(active) {
@@ -3066,6 +3301,10 @@
     }
     if (command === 'RESET_ALL_EDITS') {
       resetAllTemporaryEdits();
+      return;
+    }
+    if (command === 'REQUEST_ANCESTOR_EXPORT') {
+      emitAncestorExport(message.selectionId);
       return;
     }
     if (command === 'RESTORE_SELECTION') {

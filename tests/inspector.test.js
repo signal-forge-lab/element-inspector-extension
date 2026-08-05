@@ -429,6 +429,62 @@ test('limits CSS custom property snapshots to 200 entries', () => {
   });
 });
 
+test('builds an ancestor-detail export without recursive descendants', () => {
+  const root = new MockElement('main', { id: 'app' }, {
+    rect: { top: 0, left: 0, width: 800, height: 600 },
+    computedStyle: { display: 'block', visibility: 'visible', position: 'relative' }
+  });
+  const parent = new MockElement('section', { class: 'panel' }, {
+    rect: { top: 20, left: 30, width: 500, height: 300 },
+    computedStyle: { display: 'grid', visibility: 'visible', position: 'relative' }
+  });
+  const selected = new MockElement('button', { id: 'save', type: 'button' }, {
+    rect: { top: 50, left: 60, width: 120, height: 36 },
+    textContent: '保存',
+    outerHTML: '<button id="save"><span><strong>保存</strong></span></button>',
+    computedStyle: { display: 'inline-flex', visibility: 'visible', position: 'static' }
+  });
+  const child = new MockElement('span', { class: 'label' }, {
+    textContent: '保存',
+    outerHTML: '<span class="label"><strong>保存</strong></span>'
+  });
+  const grandchild = new MockElement('strong', {}, { textContent: '保存' });
+
+  root.appendChild(parent);
+  parent.appendChild(selected);
+  selected.appendChild(child);
+  child.appendChild(grandchild);
+
+  const result = inspector.buildAncestorExport(selected, { maxAncestorDepth: 8 });
+
+  assert.equal(result.exportProfile, 'ancestor-detail');
+  assert.equal(result.selected.tagName, 'button');
+  assert.equal(result.selected.shallowOuterHTML, '<button id="save" type="button">…</button>');
+  assert.doesNotMatch(result.selected.shallowOuterHTML, /span|strong|保存/);
+  assert.equal(result.directChildren.length, 1);
+  assert.equal(result.directChildren[0].tagName, 'span');
+  assert.equal(Object.hasOwn(result.directChildren[0], 'computedStyles'), false);
+  assert.equal(Object.hasOwn(result.directChildren[0], 'children'), false);
+  assert.equal(result.ancestors.length, 2);
+  assert.equal(result.ancestors[0].depth, 1);
+  assert.equal(result.ancestors[0].relation, 'parent');
+  assert.equal(result.ancestors[0].tagName, 'section');
+  assert.equal(result.ancestors[0].computedStyles.layout.display, 'grid');
+  assert.equal(result.ancestors[0].shallowOuterHTML, '<section class="panel">…</section>');
+  assert.doesNotMatch(result.ancestors[0].shallowOuterHTML, /button|span|strong|保存/);
+  assert.equal(Object.hasOwn(result.ancestors[0], 'ancestors'), false);
+  assert.equal(result.ancestors[1].depth, 2);
+  assert.equal(result.ancestors[1].relation, 'ancestor');
+  assert.equal(result.ancestors[1].tagName, 'main');
+  assert.deepEqual(result.scope, {
+    ancestorLimit: 8,
+    ancestorCount: 2,
+    directChildCount: 1,
+    directChildrenTruncated: false,
+    descendantsIncluded: false
+  });
+});
+
 test('collects basic accessibility semantics, name, description, focus, and ARIA states', () => {
   const label = new MockElement('span', { id: 'save-label' }, { textContent: 'Save changes' });
   const description = new MockElement('span', { id: 'save-help' }, { textContent: 'Applies the current settings' });
@@ -522,11 +578,11 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.name, 'Prismora');
-  assert.equal(manifest.version, '0.14.0');
+  assert.equal(manifest.name, 'Prismora — Element Inspector');
+  assert.equal(manifest.version, '0.14.1');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.14.0');
+  assert.equal(pkg.version, '0.14.1');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -564,6 +620,7 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(background, /command === 'PIN_SELECTION' \|\| command === 'UNPIN_SELECTION'/);
   assert.match(background, /command === 'APPLY_EDIT' \|\| command === 'UNDO_EDIT' \|\| command === 'RESET_CURRENT_EDITS'/);
   assert.match(background, /command === 'RESET_ALL_EDITS'/);
+  assert.match(background, /command === 'REQUEST_ANCESTOR_EXPORT'/);
   assert.match(background, /targetFrameId/);
   assert.match(background, /historyRestoreFailed: true/);
   assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/);
@@ -652,6 +709,15 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /countdownDeadline/);
   assert.match(content, /JSONをコピー/);
   assert.match(content, /JSONを保存/);
+  assert.match(content, /data-json-profile="standard"/);
+  assert.match(content, /data-json-profile="ancestor-detail"/);
+  assert.match(content, /function setJsonProfile/);
+  assert.match(content, /function requestAncestorExport/);
+  assert.match(content, /function buildAncestorExportSnapshot/);
+  assert.match(content, /kind === 'ancestorExport'/);
+  assert.match(content, /REQUEST_ANCESTOR_EXPORT/);
+  assert.match(content, /prismora-ancestors-/);
+  assert.match(content, /Descendants[\s\S]*Excluded/);
   assert.match(content, /beginPanelDrag/);
   assert.match(content, /setPointerCapture/);
   assert.match(content, /releasePointerCapture/);

@@ -7,6 +7,8 @@ Chromeのツールバーから起動し、ページ上のDOM要素を視覚的�
 ```text
 Prismora
 Web Element Inspector
+
+Chromeの拡張機能設定画面では`Prismora — Element Inspector`として表示されます。
 ```
 
 読みは「プリズモラ」です。
@@ -15,7 +17,7 @@ Web Element Inspector
 
 ## 現在のバージョン
 
-`0.14.0`
+`0.14.1`
 
 ## 起動
 
@@ -282,6 +284,15 @@ iframe間の選択結果はBackground Service Workerを介してトップフレ�
 
 ## JSON出力
 
+JSONタブの`Export profile`で次を切り替えます。
+
+- `Standard`: 従来の選択要素中心JSON
+- `Ancestor detail`: 親から最大8階層を、選択要素と同じ詳細構造で取得
+
+`Ancestor detail`は選択中のフレームへオンデマンド要求し、通常の選択結果へ常時混載しません。選択要素と各先祖には属性、テキスト、座標、shallow HTML、Locator、Computed Styles、CSS Custom Properties、Box Model、Accessibility、限定イベント、Shadow情報、Frame情報、一時編集情報を含めます。
+
+直下の子は従来どおり最大80件の概要だけを含み、孫以下は取得しません。`shallowOuterHTML`も開始タグ相当だけを保持し、配下DOMは展開しません。
+
 主要項目：
 
 ```json
@@ -338,6 +349,7 @@ iframe間の選択結果はBackground Service Workerを介してトップフレ�
 - `selectedOuterHTML`と`outerHTML`は最大5,000文字
 - `ancestors`は最大8階層
 - 子要素一覧は最大80件
+- `Ancestor detail`の直下の子は概要のみ、孫以下は除外
 - 座標は各Documentのビューポート基準
 
 ## 権限とプライバシー

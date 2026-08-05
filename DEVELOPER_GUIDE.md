@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.0`
+`0.14.1`
 
 ## 構成
 
@@ -230,6 +230,14 @@ customPropertiesMeta（total / truncated / limit）
 ```
 
 Styles UIはプロパティ名・値・一時編集値をクライアント側で絞り込み、編集許可リスト内の行だけ`Edit`タブへ直接送ります。一時編集済みの行には`TEMP`表示と変更前・指定値・適用後値を表示します。`collectBoxModel()`は`getBoundingClientRect()`とcomputed border / paddingからcontent boxを算出し、margin、border、padding、content、borderBox、scroll sizeを返します。すべて選択時点のスナップショットで、継続監視はしません。
+
+### Ancestor detail JSON
+
+`ElementInspector.buildAncestorExport()`は選択要素と親から最大8階層へ、同じ詳細構造のスナップショットを生成します。各詳細には属性、テキスト、座標、shallow HTML、Locator、Computed Styles、Box Model、Accessibility、限定イベント、Shadow情報を含めます。
+
+トップフレームUIが`REQUEST_ANCESTOR_EXPORT`を選択中フレームへ送り、フレーム側でFrame情報と対象別の一時編集情報を追加して`ancestorExport`イベントとして返します。選択IDが変わった応答は採用しません。
+
+直下の子は`navigation.children`相当の概要のみです。先祖の`outerHTML`や子孫再帰は含めず、`shallowOuterHTML`で開始タグ相当だけを表現します。
 
 ### Accessibility
 
