@@ -269,7 +269,7 @@ Handler previewは最大320文字です。`addEventListener()`、フレームワ
 - データ表示面は濃いグラファイト、虹色はフォーカス境界、選択タブ、要素強調枠へ限定
 - メインアイコンは指定された256px透過PNGを正本として、形状を変更せずサイズ別PNGへ縮小
 - 基本文字は`#20262D`、補助文字は`#68727E`、成功状態は`#4F8A68`
-- Current TargetとHierarchyを固定操作領域へ集約
+- 固定操作領域はCurrent Target、独立したSelection History、Hierarchyの順に配置
 - Overview / Styles / Edit / A11y / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
 - タブは囲み型セグメントではなく下線型
 - フレーム情報と選択状態をヘッダへ集約

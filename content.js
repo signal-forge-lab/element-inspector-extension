@@ -1966,12 +1966,13 @@
         font-weight: 700;
         letter-spacing: .045em;
       }
-      button.density-option:hover:not(:disabled) { background: rgba(255,255,255,.7); border-color: transparent; }
+      button.density-option[data-active="false"]:hover:not(:disabled) { background: rgba(255,255,255,.7); border-color: transparent; }
       button.density-option[data-active="true"] {
         background: var(--ei-graphite);
         color: #f7f8fa;
         box-shadow: 0 1px 0 rgba(255,255,255,.12) inset;
       }
+      button.density-option[data-active="true"]:hover:not(:disabled) { background: #303943; color: #f7f8fa; }
       button.pin-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 72px; }
       button.pin-button[data-active="true"] { color: #4b6177; border-color: rgba(75,97,119,.34); background: rgba(223,230,237,.9); }
       .pin-count { display: inline-grid; place-items: center; min-width: 16px; height: 16px; border-radius: 999px; background: rgba(32,38,45,.08); color: #4b5560; font-size: 8px; }
@@ -2002,7 +2003,11 @@
       .status[data-kind="error"] { color: var(--ei-danger); }
       .command-row { display: grid; grid-template-columns: minmax(0,1fr) 142px auto; gap: 7px; margin-top: 8px; }
       .delay-control { display: grid; grid-template-columns: 43px 1fr; gap: 5px; }
-      .history-surface { margin-top: 8px; }
+      .history-surface {
+        padding: 9px 11px 10px;
+        border-top: 1px solid var(--ei-line);
+        background: rgba(32,38,45,.025);
+      }
       .history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
       .history-label { color: var(--ei-faint); font-size: 8.5px; font-weight: 700; letter-spacing: .085em; text-transform: uppercase; }
       .history-position { color: #5f6974; font: 650 9px/1 ui-monospace,SFMono-Regular,Consolas,monospace; }
@@ -2264,7 +2269,7 @@
       .panel[data-density="comfortable"] button.icon-button { width: 38px; min-width: 38px; height: 38px; min-height: 38px; }
       .panel[data-density="comfortable"] .density-control { min-height: 31px; }
       .panel[data-density="comfortable"] button.density-option { min-height: 25px; }
-      .panel[data-density="comfortable"] .history-surface { margin-top: 12px; }
+      .panel[data-density="comfortable"] .history-surface { padding: 13px 16px 14px; }
       .panel[data-density="comfortable"] .history-head { margin-bottom: 8px; }
       .panel[data-density="comfortable"] .history-bar { grid-template-columns: 84px minmax(0,1fr) 84px; gap: 8px; }
       .panel[data-density="comfortable"] button.history-button, .panel[data-density="comfortable"] .history-select { min-height: 40px; }
@@ -2371,23 +2376,6 @@
               </div>
             </div>
             <div class="status" role="status">対象をホバーし、クリックして固定してください。</div>
-            <div class="history-surface">
-              <div class="history-head">
-                <span class="history-label">選択履歴</span>
-                <span class="history-position" aria-live="polite">0 / 0</span>
-              </div>
-              <div class="history-bar" aria-label="選択履歴">
-                <button class="history-button" type="button" data-action="history-back" aria-label="前の選択へ戻る" title="前の選択へ戻る">
-                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.75 3.5L5.25 8l4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                  <span>戻る</span>
-                </button>
-                <select class="history-select" aria-label="選択履歴"><option value="">履歴なし</option></select>
-                <button class="history-button" type="button" data-action="history-forward" aria-label="次の選択へ進む" title="次の選択へ進む">
-                  <span>進む</span>
-                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.25 3.5L10.75 8l-4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
-              </div>
-            </div>
             <div class="command-row">
               <button class="primary" type="button" data-action="pick" data-active="true">要素を選択</button>
               <div class="delay-control">
@@ -2395,6 +2383,24 @@
                 <button type="button" data-action="delay">秒後に固定</button>
               </div>
               <button class="pin-button" type="button" data-action="pin" aria-pressed="false">Pin <span class="pin-count">0</span></button>
+            </div>
+          </section>
+
+          <section class="history-surface" aria-label="選択履歴">
+            <div class="history-head">
+              <span class="history-label">Selection history</span>
+              <span class="history-position" aria-live="polite">0 / 0</span>
+            </div>
+            <div class="history-bar">
+              <button class="history-button" type="button" data-action="history-back" aria-label="前の選択へ戻る" title="前の選択へ戻る">
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.75 3.5L5.25 8l4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span>戻る</span>
+              </button>
+              <select class="history-select" aria-label="選択履歴"><option value="">履歴なし</option></select>
+              <button class="history-button" type="button" data-action="history-forward" aria-label="次の選択へ進む" title="次の選択へ進む">
+                <span>進む</span>
+                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.25 3.5L10.75 8l-4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
             </div>
           </section>
 

@@ -46,7 +46,7 @@ Web Element Inspector
 - 左右端で横幅、下端で高さ、左下・右下で幅と高さを変更できます。
 - ヘッダの`COMPACT` / `COMFORTABLE`セグメントで表示密度を切り替えます。
 - Hierarchyはタブ外の固定エリアに常時表示します。
-- 戻る・進むボタン、履歴ドロップダウンで過去の選択対象を移動できます。
+- `Current Target`と`Hierarchy`の間に独立した`Selection History`を置き、戻る・進むボタンと履歴ドロップダウンで過去の選択対象を移動できます。
 - 現在対象を最大4件までピン留めし、`Compare`で比較できます。
 - `Overview`で対象情報を確認します。
 - `Styles`でBox Modelと主要Computed Styleを確認します。
