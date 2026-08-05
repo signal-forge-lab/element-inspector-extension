@@ -15,7 +15,7 @@ Web Element Inspector
 
 ## 現在のバージョン
 
-`0.13.0`
+`0.14.0`
 
 ## 起動
 
@@ -206,8 +206,12 @@ XPathはブラウザ仕様上Shadow Root境界を越えないため、Shadow DOM
 - display / position / box-sizing / width / height / overflow / z-index
 - Flex / Gridの方向・整列・gap・template
 - font / line-height / letter-spacing / text-align / color
+- プロパティ名・値・一時編集値を対象にした検索
+- 選択要素で参照可能なCSS Custom Properties（最大200件）
+- 一時編集済みプロパティの変更前・指定値・適用後値
+- 編集可能なプロパティから`Edit`タブへの直接移動
 
-表示値は固定するたびに再取得され、JSONの`computedStyles`と`boxModel`にも含まれます。
+表示値は固定するたびに再取得され、JSONの`computedStyles`と`boxModel`にも含まれます。CSS Custom Propertiesは`computedStyles.customProperties`へ格納し、200件を超える場合は`customPropertiesMeta`へ総数と切り詰め情報を記録します。
 
 ## CSS・レイアウト一時編集
 
@@ -371,7 +375,6 @@ npm test
 
 ## ロードマップ
 
-- `0.14.0`: Styles検索、変更差分、CSS Custom Properties、Edit連携
 - `0.15.0`: DOMから確実に判定できるAccessibility診断の強化
 - `0.16.0`: Locator安定度とPlaywright・Cypress・Selenium向け出力
 

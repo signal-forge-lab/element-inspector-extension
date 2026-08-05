@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.13.0';
+  const EXTENSION_VERSION = '0.14.0';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -120,6 +120,10 @@
     layoutStylesGrid: null,
     flexGridStylesGrid: null,
     typographyStylesGrid: null,
+    customPropertiesGrid: null,
+    customPropertiesSummary: null,
+    stylesSearchInput: null,
+    stylesSummary: null,
     editPropertySelect: null,
     editValueInput: null,
     editApplyButton: null,
@@ -968,21 +972,80 @@
     return `T ${sides.top || '0px'} · R ${sides.right || '0px'} · B ${sides.bottom || '0px'} · L ${sides.left || '0px'}`;
   }
 
-  function renderStylePropertyGrid(container, values) {
-    if (!container) return;
+  function openStyleInEdit(property, value) {
+    if (!ui.result || !EDITABLE_PROPERTY_SET.has(property)) return;
+    ui.editPropertySelect.value = property;
+    ui.editValueInput.value = value && value !== '—' ? value : '';
+    setActiveTab('edit');
+    renderEditView(ui.result);
+    ui.editValueInput.focus();
+    ui.editValueInput.select();
+  }
+
+  function renderStylePropertyGrid(container, values, options = {}) {
+    if (!container) return 0;
     container.replaceChildren();
-    for (const [property, value] of Object.entries(values || {})) {
+    const query = String(options.query || '').trim().toLowerCase();
+    const editDeclarations = options.editDeclarations || new Map();
+    const entries = Object.entries(values || {}).filter(([property, value]) => {
+      if (!query) return true;
+      const declaration = editDeclarations.get(property);
+      return [property, value, declaration?.before, declaration?.value, declaration?.after]
+        .some(item => String(item || '').toLowerCase().includes(query));
+    });
+    if (!entries.length) {
+      const empty = document.createElement('div');
+      empty.className = 'style-empty';
+      empty.textContent = options.emptyText || (query ? '一致するプロパティはありません。' : 'プロパティはありません。');
+      container.appendChild(empty);
+      return 0;
+    }
+    for (const [property, value] of entries) {
+      const declaration = editDeclarations.get(property) || null;
       const item = document.createElement('div');
       item.className = 'style-property';
+      item.dataset.edited = declaration ? 'true' : 'false';
+      const nameWrap = document.createElement('div');
+      nameWrap.className = 'style-property-name-wrap';
       const label = document.createElement('span');
       label.className = 'style-property-name';
       label.textContent = property;
+      nameWrap.appendChild(label);
+      if (declaration) {
+        const badge = document.createElement('span');
+        badge.className = 'style-property-badge';
+        badge.textContent = 'TEMP';
+        nameWrap.appendChild(badge);
+      }
+      const valueWrap = document.createElement('div');
+      valueWrap.className = 'style-property-value-wrap';
       const valueNode = document.createElement('code');
       valueNode.className = 'style-property-value';
-      valueNode.textContent = value || '—';
-      item.append(label, valueNode);
+      valueNode.textContent = declaration?.after || value || '—';
+      valueWrap.appendChild(valueNode);
+      if (declaration) {
+        const diff = document.createElement('span');
+        diff.className = 'style-property-diff';
+        diff.textContent = `${declaration.before || '—'} → requested ${declaration.value || '—'}`;
+        diff.title = `Applied: ${declaration.after || value || '—'}`;
+        valueWrap.appendChild(diff);
+      }
+      item.append(nameWrap, valueWrap);
+      if (options.editable !== false && EDITABLE_PROPERTY_SET.has(property)) {
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'style-edit-button';
+        editButton.textContent = 'Edit';
+        editButton.title = `${property}を一時編集`;
+        editButton.addEventListener('click', () => openStyleInEdit(
+          property,
+          declaration?.value || declaration?.after || value
+        ));
+        item.appendChild(editButton);
+      }
       container.appendChild(item);
     }
+    return entries.length;
   }
 
   function renderStylesView(result) {
@@ -1007,9 +1070,40 @@
         ? `${scroll.width} × ${scroll.height}`
         : '—';
     }
-    renderStylePropertyGrid(ui.layoutStylesGrid, computed?.layout);
-    renderStylePropertyGrid(ui.flexGridStylesGrid, computed?.flexGrid);
-    renderStylePropertyGrid(ui.typographyStylesGrid, computed?.typography);
+    const query = ui.stylesSearchInput?.value || '';
+    const declarations = result?.temporaryEdits?.declarations || [];
+    const editDeclarations = new Map(declarations.map(item => [item.property, item]));
+    const groups = [
+      [ui.layoutStylesGrid, computed?.layout],
+      [ui.flexGridStylesGrid, computed?.flexGrid],
+      [ui.typographyStylesGrid, computed?.typography]
+    ];
+    let visibleCount = 0;
+    let totalCount = 0;
+    for (const [container, values] of groups) {
+      totalCount += Object.keys(values || {}).length;
+      visibleCount += renderStylePropertyGrid(container, values, { query, editDeclarations });
+    }
+    const customProperties = computed?.customProperties || {};
+    visibleCount += renderStylePropertyGrid(ui.customPropertiesGrid, customProperties, {
+      query,
+      editable: false,
+      emptyText: query ? '一致するCSS変数はありません。' : '利用可能なCSS変数はありません。'
+    });
+    const customMeta = computed?.customPropertiesMeta;
+    totalCount += customMeta?.total ?? Object.keys(customProperties).length;
+    if (ui.customPropertiesSummary) {
+      const total = customMeta?.total ?? Object.keys(customProperties).length;
+      ui.customPropertiesSummary.textContent = customMeta?.truncated ? `${total} total · first ${customMeta.limit}` : `${total} variables`;
+    }
+    if (ui.stylesSummary) {
+      ui.stylesSummary.textContent = !result
+        ? '要素を固定してください'
+        : query.trim()
+          ? `${visibleCount} matches`
+          : `${totalCount} properties · ${declarations.length} edited`;
+    }
+    if (ui.stylesSearchInput) ui.stylesSearchInput.disabled = !result;
   }
 
   function renderAuditRows(container, entries, emptyText = '情報なし') {
@@ -2099,6 +2193,9 @@
       .geometry-core { display: grid; place-items: center; min-width: 74px; min-height: 48px; border: 1px solid transparent; border-radius: 8px; background: linear-gradient(var(--ei-graphite-soft), var(--ei-graphite-soft)) padding-box, var(--ei-spectrum) border-box; color: #f2f5f7; font: 650 12px/1 ui-monospace,SFMono-Regular,Consolas,monospace; }
       .geometry-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
       .styles-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
+      .styles-toolbar { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 8px; align-items: center; margin-bottom: 8px; }
+      .styles-search { min-width: 0; min-height: 34px; }
+      .styles-summary, .custom-properties-summary { color: var(--ei-muted); font-size: 8.5px; white-space: nowrap; }
       .styles-section {
         min-width: 0;
         border: 1px solid var(--ei-line);
@@ -2108,6 +2205,7 @@
         box-shadow: 0 1px 0 rgba(255,255,255,.72) inset;
       }
       .styles-section-title { margin: 0 0 8px; color: #69737e; font-size: 8.5px; font-weight: 700; letter-spacing: .075em; text-transform: uppercase; }
+      .custom-properties-section { grid-column: 1 / -1; }
       .box-model-diagram { display: grid; gap: 5px; border-radius: 10px; padding: 8px; background: rgba(32,38,45,.045); }
       .box-model-layer { display: grid; gap: 5px; border: 1px solid var(--ei-line); border-radius: 8px; padding: 7px; }
       .box-model-layer.margin { background: rgba(224,211,176,.28); }
@@ -2120,10 +2218,17 @@
       .box-model-layer.content .box-model-layer-head code { color: #f3f6f8; font-size: 11px; font-weight: 650; }
       .box-model-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 8px; }
       .style-property-grid { display: grid; grid-template-columns: 1fr; gap: 0; }
-      .style-property { display: grid; grid-template-columns: minmax(118px,.8fr) minmax(0,1.2fr); gap: 8px; align-items: baseline; min-width: 0; border-bottom: 1px solid rgba(32,38,45,.08); padding: 6px 0; }
+      .style-property { display: grid; grid-template-columns: minmax(104px,.75fr) minmax(0,1.25fr) auto; gap: 8px; align-items: center; min-width: 0; border-bottom: 1px solid rgba(32,38,45,.08); padding: 6px 0; }
       .style-property:last-child { border-bottom: 0; }
+      .style-property[data-edited="true"] { margin-inline: -5px; padding-inline: 5px; border-radius: 7px; background: rgba(223,230,237,.46); }
+      .style-property-name-wrap { display: flex; align-items: center; gap: 5px; min-width: 0; }
       .style-property-name { overflow: hidden; color: var(--ei-faint); text-overflow: ellipsis; white-space: nowrap; font-size: 8.5px; }
+      .style-property-badge { flex: 0 0 auto; border: 1px solid rgba(75,97,119,.24); border-radius: 999px; padding: 1px 4px; color: #4b6177; background: rgba(255,255,255,.62); font-size: 6.5px; font-weight: 750; letter-spacing: .045em; }
+      .style-property-value-wrap { min-width: 0; text-align: right; }
       .style-property-value { overflow: hidden; color: #29313a; text-align: right; text-overflow: ellipsis; white-space: nowrap; font: 9.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .style-property-diff { display: block; overflow: hidden; margin-top: 1px; color: var(--ei-muted); text-overflow: ellipsis; white-space: nowrap; font: 7.5px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      button.style-edit-button { min-height: 25px; padding: 3px 7px; font-size: 8px; }
+      .style-empty { grid-column: 1 / -1; border: 1px dashed var(--ei-line-strong); border-radius: 8px; padding: 10px 8px; color: var(--ei-muted); text-align: center; font-size: 8.5px; }
       .edit-grid, .audit-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
       .edit-section, .audit-section {
         min-width: 0;
@@ -2308,6 +2413,13 @@
         .history-bar { grid-template-columns: 68px minmax(0,1fr) 68px; }
         .nav-grid { grid-template-columns: repeat(3, 1fr); }
         .tabs { gap: 14px; }
+        .styles-toolbar { grid-template-columns: 1fr; gap: 4px; }
+        .styles-summary { white-space: normal; }
+        .style-property { grid-template-columns: minmax(0,1fr) auto; align-items: start; }
+        .style-property-name-wrap { grid-column: 1; }
+        .style-property-value-wrap { grid-column: 1; text-align: left; }
+        .style-property-value { text-align: left; }
+        button.style-edit-button { grid-column: 2; grid-row: 1 / 3; }
         .edit-form { grid-template-columns: 1fr; }
       }
       @media (max-width: 380px) {
@@ -2463,6 +2575,10 @@
           </div>
 
           <div class="tab-panel" data-panel="styles" hidden>
+            <div class="styles-toolbar">
+              <input class="styles-search" type="search" data-style-search placeholder="Search properties and values…" aria-label="Stylesを検索">
+              <span class="styles-summary">要素を固定してください</span>
+            </div>
             <div class="styles-grid">
               <section class="styles-section box-model-section">
                 <h2 class="styles-section-title">Box model</h2>
@@ -2496,6 +2612,13 @@
               <section class="styles-section">
                 <h2 class="styles-section-title">Typography</h2>
                 <div class="style-property-grid" data-style-group="typography"></div>
+              </section>
+              <section class="styles-section custom-properties-section">
+                <div class="section-head">
+                  <h2 class="styles-section-title" style="margin:0">CSS Custom Properties</h2>
+                  <span class="custom-properties-summary">0 variables</span>
+                </div>
+                <div class="style-property-grid" data-style-group="custom-properties"></div>
               </section>
             </div>
           </div>
@@ -2689,6 +2812,10 @@
     ui.layoutStylesGrid = panel.querySelector('[data-style-group="layout"]');
     ui.flexGridStylesGrid = panel.querySelector('[data-style-group="flex-grid"]');
     ui.typographyStylesGrid = panel.querySelector('[data-style-group="typography"]');
+    ui.customPropertiesGrid = panel.querySelector('[data-style-group="custom-properties"]');
+    ui.customPropertiesSummary = panel.querySelector('.custom-properties-summary');
+    ui.stylesSearchInput = panel.querySelector('[data-style-search]');
+    ui.stylesSummary = panel.querySelector('.styles-summary');
     ui.editPropertySelect = panel.querySelector('[data-edit="property"]');
     ui.editValueInput = panel.querySelector('[data-edit="value"]');
     ui.editApplyButton = panel.querySelector('[data-action="apply-edit"]');
@@ -2743,6 +2870,7 @@
     ui.pinButton.addEventListener('click', toggleCurrentPin);
     ui.clearPinsButton.addEventListener('click', clearPins);
     ui.editPropertySelect.addEventListener('change', () => renderEditView(ui.result));
+    ui.stylesSearchInput.addEventListener('input', () => renderStylesView(ui.result));
     ui.editApplyButton.addEventListener('click', applyEditFromUI);
     ui.editValueInput.addEventListener('keydown', event => {
       if (event.key === 'Enter') applyEditFromUI();

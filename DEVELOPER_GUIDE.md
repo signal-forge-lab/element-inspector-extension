@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.13.0`
+`0.14.0`
 
 ## 構成
 
@@ -219,15 +219,17 @@ CSS Selectorは各Selector Root内の相対値です。`collectShadowContext()`�
 
 ### Computed Style / Box Model
 
-`collectComputedStyles()`は主要プロパティを次の3グループへ整理します。
+`collectComputedStyles()`は主要プロパティを次の3グループへ整理し、CSS Custom Propertiesも別スナップショットとして収集します。
 
 ```text
 layout
 flexGrid
 typography
+customProperties（最大200件）
+customPropertiesMeta（total / truncated / limit）
 ```
 
-`collectBoxModel()`は`getBoundingClientRect()`とcomputed border / paddingからcontent boxを算出し、margin、border、padding、content、borderBox、scroll sizeを返します。すべて選択時点のスナップショットで、継続監視はしません。
+Styles UIはプロパティ名・値・一時編集値をクライアント側で絞り込み、編集許可リスト内の行だけ`Edit`タブへ直接送ります。一時編集済みの行には`TEMP`表示と変更前・指定値・適用後値を表示します。`collectBoxModel()`は`getBoundingClientRect()`とcomputed border / paddingからcontent boxを算出し、margin、border、padding、content、borderBox、scroll sizeを返します。すべて選択時点のスナップショットで、継続監視はしません。
 
 ### Accessibility
 

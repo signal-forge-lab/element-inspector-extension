@@ -7,6 +7,7 @@
   const MAX_SELECTOR_DEPTH = 12;
   const MAX_CHILD_SUMMARIES = 80;
   const MAX_EVENT_HANDLER_PREVIEW = 320;
+  const MAX_CUSTOM_PROPERTIES = 200;
   const DOM0_EVENT_PROPERTIES = Object.freeze([
     'onclick', 'ondblclick', 'oncontextmenu',
     'oninput', 'onchange', 'onsubmit', 'onreset',
@@ -358,6 +359,26 @@
     return result;
   }
 
+  function collectCustomProperties(style) {
+    const propertyNames = [];
+    const length = Number.isFinite(style?.length) ? Math.max(0, style.length) : 0;
+    for (let index = 0; index < length; index += 1) {
+      const property = String(style.item?.(index) || style[index] || '');
+      if (property.startsWith('--')) propertyNames.push(property);
+    }
+    const uniqueNames = Array.from(new Set(propertyNames)).sort();
+    const visibleNames = uniqueNames.slice(0, MAX_CUSTOM_PROPERTIES);
+    return {
+      values: Object.fromEntries(visibleNames.map(property => [
+        property,
+        readComputedStyleValue(style, property) || '—'
+      ])),
+      total: uniqueNames.length,
+      truncated: uniqueNames.length > MAX_CUSTOM_PROPERTIES,
+      limit: MAX_CUSTOM_PROPERTIES
+    };
+  }
+
   function collectComputedStyles(element) {
     const style = getComputedStyleForElement(element);
     const result = {};
@@ -367,6 +388,13 @@
         readComputedStyleValue(style, property) || '—'
       ]));
     }
+    const customProperties = collectCustomProperties(style);
+    result.customProperties = customProperties.values;
+    result.customPropertiesMeta = {
+      total: customProperties.total,
+      truncated: customProperties.truncated,
+      limit: customProperties.limit
+    };
     return result;
   }
 

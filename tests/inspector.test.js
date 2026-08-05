@@ -355,6 +355,12 @@ test('collects computed styles and a numeric box model', () => {
     scrollWidth: 260,
     scrollHeight: 180,
     computedStyle: {
+      0: '--brand-color',
+      1: '--space-unit',
+      length: 2,
+      '--brand-color': '#123456',
+      '--space-unit': '8px',
+      getPropertyValue(property) { return this[property] || ''; },
       display: 'flex',
       position: 'relative',
       boxSizing: 'border-box',
@@ -386,12 +392,41 @@ test('collects computed styles and a numeric box model', () => {
   assert.equal(result.computedStyles.layout.display, 'flex');
   assert.equal(result.computedStyles.flexGrid['justify-content'], 'space-between');
   assert.equal(result.computedStyles.typography['font-size'], '14px');
+  assert.deepEqual(result.computedStyles.customProperties, {
+    '--brand-color': '#123456',
+    '--space-unit': '8px'
+  });
+  assert.deepEqual(result.computedStyles.customPropertiesMeta, {
+    total: 2,
+    truncated: false,
+    limit: 200
+  });
   assert.deepEqual(result.boxModel.margin, {
     top: '4px', right: '5px', bottom: '6px', left: '7px'
   });
   assert.deepEqual(result.boxModel.content, { width: 172, height: 76 });
   assert.deepEqual(result.boxModel.borderBox, { width: 200, height: 100 });
   assert.deepEqual(result.boxModel.scroll, { width: 260, height: 180 });
+});
+
+test('limits CSS custom property snapshots to 200 entries', () => {
+  const computedStyle = { length: 205 };
+  for (let index = 0; index < 205; index += 1) {
+    const property = `--token-${String(index).padStart(3, '0')}`;
+    computedStyle[index] = property;
+    computedStyle[property] = String(index);
+  }
+  computedStyle.getPropertyValue = function getPropertyValue(property) {
+    return this[property] || '';
+  };
+  const element = new MockElement('div', {}, { computedStyle });
+  const computed = inspector.collectComputedStyles(element);
+  assert.equal(Object.keys(computed.customProperties).length, 200);
+  assert.deepEqual(computed.customPropertiesMeta, {
+    total: 205,
+    truncated: true,
+    limit: 200
+  });
 });
 
 test('collects basic accessibility semantics, name, description, focus, and ARIA states', () => {
@@ -488,10 +523,10 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora');
-  assert.equal(manifest.version, '0.13.0');
+  assert.equal(manifest.version, '0.14.0');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.13.0');
+  assert.equal(pkg.version, '0.14.0');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -634,6 +669,14 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /data-style-group="layout"/);
   assert.match(content, /data-style-group="flex-grid"/);
   assert.match(content, /data-style-group="typography"/);
+  assert.match(content, /data-style-group="custom-properties"/);
+  assert.match(content, /data-style-search/);
+  assert.match(content, /function openStyleInEdit/);
+  assert.match(content, /style-property-badge/);
+  assert.match(content, /requested \$\{declaration\.value/);
+  assert.match(content, /stylesSearchInput\.addEventListener\('input'/);
+  assert.match(inspectorSource, /MAX_CUSTOM_PROPERTIES = 200/);
+  assert.match(inspectorSource, /function collectCustomProperties/);
   assert.match(content, /EDITABLE_PROPERTIES/);
   assert.match(content, /adoptedStyleSheets/);
   assert.match(content, /function applyTemporaryEdit/);
