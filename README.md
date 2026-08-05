@@ -8,7 +8,7 @@ Chromeのツールバーから起動し、ページ上のDOM要素を視覚的�
 Prismora
 Web Element Inspector
 
-Chromeの拡張機能設定画面では`Prismora — Element Inspector`として表示されます。
+Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`として表示されます。
 ```
 
 読みは「プリズモラ」です。

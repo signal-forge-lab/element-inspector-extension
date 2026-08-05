@@ -578,7 +578,7 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.name, 'Prismora — Element Inspector');
+  assert.equal(manifest.name, 'Prismora — Web Element Inspector');
   assert.equal(manifest.version, '0.14.1');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
