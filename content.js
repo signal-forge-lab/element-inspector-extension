@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.12.0';
+  const EXTENSION_VERSION = '0.13.0';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -80,9 +80,10 @@
     pickButton: null,
     delayInput: null,
     delayButton: null,
-    densityButton: null,
+    densityButtons: [],
     backButton: null,
     historySelect: null,
+    historyPosition: null,
     forwardButton: null,
     pinButton: null,
     pinCount: null,
@@ -902,6 +903,13 @@
     return `FRAME ${frame.frameId} · DEPTH ${frame.depth}`;
   }
 
+  function renderHeaderFrameBadge(frame) {
+    if (!ui.frameBadge) return;
+    const isIframe = Boolean(frame && !frame.isTopFrame);
+    ui.frameBadge.hidden = !isIframe;
+    ui.frameBadge.textContent = isIframe ? `IFRAME · DEPTH ${frame.depth ?? 0}` : '';
+  }
+
   function locatorBadge(locator, frameRelative) {
     const scopes = [frameRelative ? 'FRAME' : 'DOCUMENT'];
     if (locator?.scope === 'shadow-root' || locator?.scope === 'shadow-chain') {
@@ -934,6 +942,10 @@
 
   function renderHistoryMenu() {
     if (!ui.historySelect) return;
+    if (ui.historyPosition) {
+      const currentPosition = ui.historyIndex >= 0 ? ui.historyIndex + 1 : 0;
+      ui.historyPosition.textContent = `${currentPosition} / ${ui.history.length}`;
+    }
     ui.historySelect.replaceChildren();
     if (!ui.history.length) {
       ui.historySelect.appendChild(new Option('履歴なし', ''));
@@ -1297,7 +1309,7 @@
       ui.frameDepthValue.textContent = '0';
       ui.shadowDepthValue.textContent = '0';
       ui.shadowHostsValue.textContent = 'Document tree';
-      ui.frameBadge.textContent = 'TOP FRAME';
+      renderHeaderFrameBadge(null);
       setLocatorView(ui.cssValue, ui.cssBadge, null, false);
       setLocatorView(ui.xpathValue, ui.xpathBadge, null, false);
       setLocatorView(ui.jsPathValue, ui.jsPathBadge, null, false);
@@ -1310,7 +1322,7 @@
 
     const rect = result.selectedRect;
     ui.targetName.textContent = `<${result.selectedTag}>`;
-    ui.frameBadge.textContent = frameBadgeText(result.frame);
+    renderHeaderFrameBadge(result.frame);
     ui.tagValue.textContent = result.selectedTag || '—';
     ui.identityValue.textContent = identityFromAttributes(result.selectedAttributes);
     ui.rectValue.textContent = rect
@@ -1462,15 +1474,13 @@
 
   function setDensity(density) {
     ui.density = density === 'comfortable' ? 'comfortable' : 'compact';
-    if (!ui.panel || !ui.densityButton) return;
+    if (!ui.panel) return;
     ui.panel.dataset.density = ui.density;
-    ui.densityButton.textContent = ui.density === 'compact' ? 'COMPACT' : 'COMFORTABLE';
-    ui.densityButton.setAttribute('aria-label', `表示密度: ${ui.density === 'compact' ? 'Compact' : 'Comfortable'}`);
-    ui.densityButton.title = ui.density === 'compact' ? 'Comfortable表示へ切り替え' : 'Compact表示へ切り替え';
-  }
-
-  function toggleDensity() {
-    setDensity(ui.density === 'compact' ? 'comfortable' : 'compact');
+    for (const button of ui.densityButtons) {
+      const active = button.dataset.densityOption === ui.density;
+      button.dataset.active = active ? 'true' : 'false';
+      button.setAttribute('aria-pressed', String(active));
+    }
   }
 
   function beginPicking() {
@@ -1571,7 +1581,7 @@
     if (!ui.result) return;
     const tag = ui.result.selectedTag || 'element';
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `element-inspector-${tag}-${stamp}.json`;
+    const filename = `prismora-${tag}-${stamp}.json`;
     const blob = new Blob([JSON.stringify(ui.result, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement('a');
@@ -1591,7 +1601,7 @@
 
     if (event.kind === 'hover') {
       ui.targetName.textContent = event.summary?.label || 'Hovered element';
-      ui.frameBadge.textContent = frameBadgeText({ ...event.frame, frameId: event.frameId });
+      renderHeaderFrameBadge({ ...event.frame, frameId: event.frameId });
       setUIStatus(ui.countdownTimer !== null
         ? 'カウント終了時にこの要素を固定します。'
         : 'クリックするとこの要素を固定します。');
@@ -1896,6 +1906,7 @@
       .mode-pill[data-mode="picking"] { color: #4f7099; border-color: rgba(79,112,153,.34); background: rgba(224,234,246,.72); }
       .mode-pill[data-mode="fixed"] { color: var(--ei-success); border-color: rgba(79,138,104,.3); background: rgba(226,240,232,.76); }
       .mode-pill[data-mode="countdown"] { color: #947039; border-color: rgba(148,112,57,.28); background: rgba(245,237,219,.78); }
+      .frame-pill[hidden] { display: none; }
       button, input, select { font: inherit; }
       button {
         --ei-control-fill: rgba(255,255,255,.86);
@@ -1933,7 +1944,34 @@
       }
       button.icon-button svg { display: block; width: 14px; height: 14px; stroke: currentColor; }
       button.close-button { border-radius: 8px; color: #59636e; }
-      button.density-button { min-width: 78px; padding-inline: 8px; color: #59636e; font-size: 8px; letter-spacing: .045em; }
+      .density-control {
+        display: inline-flex;
+        align-items: center;
+        gap: 2px;
+        min-height: 29px;
+        border: 1px solid var(--ei-line);
+        border-radius: 9px;
+        padding: 2px;
+        background: rgba(32,38,45,.045);
+      }
+      button.density-option {
+        min-height: 23px;
+        border: 0;
+        border-radius: 6px;
+        padding: 0 7px;
+        background: transparent;
+        color: #69737e;
+        box-shadow: none;
+        font-size: 7.5px;
+        font-weight: 700;
+        letter-spacing: .045em;
+      }
+      button.density-option:hover:not(:disabled) { background: rgba(255,255,255,.7); border-color: transparent; }
+      button.density-option[data-active="true"] {
+        background: var(--ei-graphite);
+        color: #f7f8fa;
+        box-shadow: 0 1px 0 rgba(255,255,255,.12) inset;
+      }
       button.pin-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 72px; }
       button.pin-button[data-active="true"] { color: #4b6177; border-color: rgba(75,97,119,.34); background: rgba(223,230,237,.9); }
       .pin-count { display: inline-grid; place-items: center; min-width: 16px; height: 16px; border-radius: 999px; background: rgba(32,38,45,.08); color: #4b5560; font-size: 8px; }
@@ -1964,8 +2002,25 @@
       .status[data-kind="error"] { color: var(--ei-danger); }
       .command-row { display: grid; grid-template-columns: minmax(0,1fr) 142px auto; gap: 7px; margin-top: 8px; }
       .delay-control { display: grid; grid-template-columns: 43px 1fr; gap: 5px; }
-      .history-bar { display: grid; grid-template-columns: 29px minmax(0,1fr) 29px; align-items: center; gap: 5px; margin-top: 7px; }
-      .history-select { min-width: 0; font-size: 9px; text-overflow: ellipsis; }
+      .history-surface { margin-top: 8px; }
+      .history-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 5px; }
+      .history-label { color: var(--ei-faint); font-size: 8.5px; font-weight: 700; letter-spacing: .085em; text-transform: uppercase; }
+      .history-position { color: #5f6974; font: 650 9px/1 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .history-bar { display: grid; grid-template-columns: 76px minmax(0,1fr) 76px; align-items: center; gap: 6px; }
+      .history-select { min-width: 0; min-height: 35px; font-size: 9.5px; text-overflow: ellipsis; }
+      button.history-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        min-width: 0;
+        min-height: 35px;
+        padding-inline: 8px;
+        font-size: 9.5px;
+        font-weight: 650;
+      }
+      button.history-button svg { display: block; width: 16px; height: 16px; stroke: currentColor; }
+      button.history-button:disabled { opacity: .48; border-color: rgba(32,38,45,.1); }
       input, select {
         --ei-control-fill: rgba(255,255,255,.9);
         width: 100%;
@@ -2201,17 +2256,28 @@
         transition: opacity 120ms ease;
       }
       .resize-handle:hover::after, .resize-handle:active::after { opacity: .9; }
-      .panel[data-density="comfortable"] .titlebar { min-height: 60px; padding-block: 12px; }
-      .panel[data-density="comfortable"] .workspace { padding-inline: 15px; }
-      .panel[data-density="comfortable"] .command-surface { padding: 13px 14px 14px; }
-      .panel[data-density="comfortable"] .hierarchy-surface { padding: 12px 13px 13px; }
-      .panel[data-density="comfortable"] button, .panel[data-density="comfortable"] input, .panel[data-density="comfortable"] select { min-height: 35px; }
-      .panel[data-density="comfortable"] .nav-grid button { min-height: 33px; }
-      .panel[data-density="comfortable"] .tabs button { min-height: 39px; }
-      .panel[data-density="comfortable"] .view-scroll { padding-top: 13px; }
-      .panel[data-density="comfortable"] .overview-section, .panel[data-density="comfortable"] .compare-card { padding: 13px; }
-      .panel[data-density="comfortable"] .styles-section { padding: 13px; }
-      .panel[data-density="comfortable"] .edit-section, .panel[data-density="comfortable"] .audit-section { padding: 13px; }
+      .panel[data-density="comfortable"] .titlebar { min-height: 64px; padding-block: 14px; }
+      .panel[data-density="comfortable"] .workspace { padding: 14px 18px 0; }
+      .panel[data-density="comfortable"] .command-surface { padding: 16px; }
+      .panel[data-density="comfortable"] .hierarchy-surface { padding: 15px 16px 16px; }
+      .panel[data-density="comfortable"] button, .panel[data-density="comfortable"] input, .panel[data-density="comfortable"] select { min-height: 38px; }
+      .panel[data-density="comfortable"] button.icon-button { width: 38px; min-width: 38px; height: 38px; min-height: 38px; }
+      .panel[data-density="comfortable"] .density-control { min-height: 31px; }
+      .panel[data-density="comfortable"] button.density-option { min-height: 25px; }
+      .panel[data-density="comfortable"] .history-surface { margin-top: 12px; }
+      .panel[data-density="comfortable"] .history-head { margin-bottom: 8px; }
+      .panel[data-density="comfortable"] .history-bar { grid-template-columns: 84px minmax(0,1fr) 84px; gap: 8px; }
+      .panel[data-density="comfortable"] button.history-button, .panel[data-density="comfortable"] .history-select { min-height: 40px; }
+      .panel[data-density="comfortable"] .command-row { gap: 10px; margin-top: 12px; }
+      .panel[data-density="comfortable"] .nav-grid { gap: 8px; }
+      .panel[data-density="comfortable"] .nav-grid button { min-height: 37px; }
+      .panel[data-density="comfortable"] .tabs { gap: 24px; margin-top: 14px; }
+      .panel[data-density="comfortable"] .tabs button { min-height: 42px; }
+      .panel[data-density="comfortable"] .view-scroll { padding-top: 16px; }
+      .panel[data-density="comfortable"] .overview-grid, .panel[data-density="comfortable"] .styles-grid, .panel[data-density="comfortable"] .audit-grid { gap: 12px; }
+      .panel[data-density="comfortable"] .overview-section, .panel[data-density="comfortable"] .compare-card { padding: 16px; }
+      .panel[data-density="comfortable"] .styles-section { padding: 16px; }
+      .panel[data-density="comfortable"] .edit-section, .panel[data-density="comfortable"] .audit-section { padding: 16px; }
       @container inspector (min-width: 440px) {
         .overview-grid { grid-template-columns: 1.12fr .9fr .98fr; }
       }
@@ -2228,8 +2294,13 @@
       }
       @container inspector (max-width: 430px) {
         .frame-pill { display: none; }
+        .brand-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .brand-subtitle { display: none; }
+        .density-control { gap: 1px; }
+        button.density-option { padding-inline: 5px; font-size: 7px; }
         .command-row { grid-template-columns: minmax(0,1fr) 135px; }
         .pin-button { grid-column: 1 / -1; }
+        .history-bar { grid-template-columns: 68px minmax(0,1fr) 68px; }
         .nav-grid { grid-template-columns: repeat(3, 1fr); }
         .tabs { gap: 14px; }
         .edit-form { grid-template-columns: 1fr; }
@@ -2270,17 +2341,20 @@
     const panel = document.createElement('section');
     panel.className = 'panel';
     panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-label', 'Element Inspector');
+    panel.setAttribute('aria-label', 'Prismora — Web Element Inspector');
     panel.innerHTML = `
       <header class="titlebar">
         <img class="brand-mark" src="${chrome.runtime.getURL('assets/icons/main-icon-48.png')}" alt="" aria-hidden="true">
         <div class="brand-copy">
-          <strong class="brand-title">Element Inspector</strong>
-          <span class="brand-subtitle">v${EXTENSION_VERSION} · drag the header to move</span>
+          <strong class="brand-title">Prismora</strong>
+          <span class="brand-subtitle">Web Element Inspector · v${EXTENSION_VERSION}</span>
         </div>
         <div class="title-actions">
-          <button class="density-button" type="button" data-action="density" aria-label="表示密度: Compact">COMPACT</button>
-          <span class="frame-pill">TOP FRAME</span>
+          <div class="density-control" role="group" aria-label="表示密度">
+            <button class="density-option" type="button" data-density-option="compact" data-active="true" aria-pressed="true">COMPACT</button>
+            <button class="density-option" type="button" data-density-option="comfortable" data-active="false" aria-pressed="false">COMFORTABLE</button>
+          </div>
+          <span class="frame-pill" hidden></span>
           <span class="mode-pill" data-mode="picking">SELECTING</span>
           <button class="icon-button close-button" type="button" data-action="close" aria-label="閉じる">
             <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -2297,6 +2371,23 @@
               </div>
             </div>
             <div class="status" role="status">対象をホバーし、クリックして固定してください。</div>
+            <div class="history-surface">
+              <div class="history-head">
+                <span class="history-label">選択履歴</span>
+                <span class="history-position" aria-live="polite">0 / 0</span>
+              </div>
+              <div class="history-bar" aria-label="選択履歴">
+                <button class="history-button" type="button" data-action="history-back" aria-label="前の選択へ戻る" title="前の選択へ戻る">
+                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.75 3.5L5.25 8l4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <span>戻る</span>
+                </button>
+                <select class="history-select" aria-label="選択履歴"><option value="">履歴なし</option></select>
+                <button class="history-button" type="button" data-action="history-forward" aria-label="次の選択へ進む" title="次の選択へ進む">
+                  <span>進む</span>
+                  <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.25 3.5L10.75 8l-4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+            </div>
             <div class="command-row">
               <button class="primary" type="button" data-action="pick" data-active="true">要素を選択</button>
               <div class="delay-control">
@@ -2304,15 +2395,6 @@
                 <button type="button" data-action="delay">秒後に固定</button>
               </div>
               <button class="pin-button" type="button" data-action="pin" aria-pressed="false">Pin <span class="pin-count">0</span></button>
-            </div>
-            <div class="history-bar" aria-label="選択履歴">
-              <button class="icon-button" type="button" data-action="history-back" aria-label="前の選択へ戻る" title="前の選択へ戻る">
-                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M9.75 3.5L5.25 8l4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </button>
-              <select class="history-select" aria-label="選択履歴"><option value="">履歴なし</option></select>
-              <button class="icon-button" type="button" data-action="history-forward" aria-label="次の選択へ進む" title="次の選択へ進む">
-                <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6.25 3.5L10.75 8l-4.5 4.5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-              </button>
             </div>
           </section>
 
@@ -2561,9 +2643,10 @@
     ui.pickButton = panel.querySelector('[data-action="pick"]');
     ui.delayInput = panel.querySelector('input[type="number"]');
     ui.delayButton = panel.querySelector('[data-action="delay"]');
-    ui.densityButton = panel.querySelector('[data-action="density"]');
+    ui.densityButtons = Array.from(panel.querySelectorAll('[data-density-option]'));
     ui.backButton = panel.querySelector('[data-action="history-back"]');
     ui.historySelect = panel.querySelector('.history-select');
+    ui.historyPosition = panel.querySelector('.history-position');
     ui.forwardButton = panel.querySelector('[data-action="history-forward"]');
     ui.pinButton = panel.querySelector('[data-action="pin"]');
     ui.pinCount = panel.querySelector('.pin-count');
@@ -2642,7 +2725,9 @@
     panel.querySelector('[data-action="close"]').addEventListener('click', () => sendTopCommand('DEACTIVATE'));
     ui.pickButton.addEventListener('click', beginPicking);
     ui.delayButton.addEventListener('click', toggleCountdown);
-    ui.densityButton.addEventListener('click', toggleDensity);
+    for (const button of ui.densityButtons) {
+      button.addEventListener('click', () => setDensity(button.dataset.densityOption));
+    }
     ui.backButton.addEventListener('click', () => navigateHistory(-1));
     ui.historySelect.addEventListener('change', () => {
       const targetIndex = Number.parseInt(ui.historySelect.value, 10);
@@ -2750,7 +2835,7 @@
     clearUICountdown();
     for (const key of Object.keys(ui)) {
       if (['activeTab'].includes(key)) continue;
-      if (key === 'tabButtons' || key === 'tabPanels' || key === 'history' || key === 'pins') ui[key] = [];
+      if (key === 'densityButtons' || key === 'tabButtons' || key === 'tabPanels' || key === 'history' || key === 'pins') ui[key] = [];
       else if (key === 'countdownTimer') ui[key] = null;
       else if (key === 'countdownDeadline' || key === 'countdownRemaining') ui[key] = 0;
       else if (key === 'historyIndex') ui[key] = -1;

@@ -1,8 +1,8 @@
-# Element Inspector 開発者ガイド
+# Prismora — Web Element Inspector 開発者ガイド
 
 ## バージョン
 
-`0.12.0`
+`0.13.0`
 
 ## 構成
 
@@ -348,14 +348,14 @@ Target frame
 
 リサイズ開始時に`right: auto`へ切り替え、現在の`left`、`top`、`width`、必要な場合は`height`を固定値へ変換します。左ハンドルは右端を、右ハンドルは左端を基準に幅を計算します。下端は上端を固定し、角ハンドルは辺より高い`z-index`で判定を優先します。
 
-密度は`panel.dataset.density`で切り替えます。
+密度はヘッダの2択セグメントから`panel.dataset.density`へ反映します。
 
 ```text
 compact
 comfortable
 ```
 
-どちらもメモリ内状態だけで、Inspector終了時に`compact`へ戻します。結果レイアウトはCSS Container Queriesでパネル幅に追従します。
+`comfortable`ではヘッダ、操作部品、履歴バー、セクション余白、カード間隔をまとめて拡大し、`compact`との差が視覚的に分かるようにします。どちらもメモリ内状態だけで、Inspector終了時に`compact`へ戻します。結果レイアウトはCSS Container Queriesでパネル幅に追従します。
 
 ## 一時CSS編集
 
@@ -531,7 +531,7 @@ npm test
 - 4件ピン留めと5件目の拒否
 - ピン対象削除後もスナップショットが残ること
 - Hierarchyが全タブで常時表示されること
-- TOP FRAME / iframeバッジがヘッダ内に収まること
+- 通常ページではフレームバッジを表示せず、iframe選択時だけ`IFRAME · DEPTH n`がヘッダ内に収まること
 - 小さいビューポート
 - Reduced Motion
 - Reduced Transparency

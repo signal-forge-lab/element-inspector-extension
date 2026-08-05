@@ -487,8 +487,11 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   );
 
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.version, '0.12.0');
-  assert.equal(pkg.version, '0.12.0');
+  assert.equal(manifest.name, 'Prismora');
+  assert.equal(manifest.version, '0.13.0');
+  assert.equal(manifest.action.default_title, 'Prismoraを開く');
+  assert.equal(pkg.name, 'prismora-web-element-inspector');
+  assert.equal(pkg.version, '0.13.0');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -576,9 +579,19 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /prefers-reduced-motion/);
   assert.match(content, /prefers-reduced-transparency/);
   assert.match(content, /tabs button::after/);
-  assert.match(content, /data-action="density"/);
+  assert.match(content, /Prismora — Web Element Inspector/);
+  assert.match(content, /Web Element Inspector · v\$\{EXTENSION_VERSION\}/);
+  assert.match(content, /data-density-option="compact"/);
+  assert.match(content, /data-density-option="comfortable"/);
   assert.match(content, /data-density=/);
-  assert.match(content, /function toggleDensity/);
+  assert.match(content, /function setDensity/);
+  assert.match(content, /data-density="comfortable"[^\n]*button\.icon-button/);
+  assert.match(content, /history-position/);
+  assert.match(content, /<span>戻る<\/span>/);
+  assert.match(content, /<span>進む<\/span>/);
+  assert.match(content, /function renderHeaderFrameBadge/);
+  assert.match(content, /<span class="frame-pill" hidden><\/span>/);
+  assert.match(content, /\.brand-subtitle \{ display: none; \}/);
   assert.match(content, /data-resize-side="left"/);
   assert.match(content, /data-resize-side="right"/);
   assert.match(content, /data-resize-direction="bottom"/);
