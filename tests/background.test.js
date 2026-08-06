@@ -8,6 +8,7 @@ const vm = require('node:vm');
 
 const MESSAGE = Object.freeze({
   QUERY_STATE: 'ELEMENT_INSPECTOR_QUERY_STATE',
+  FRAME_READY: 'ELEMENT_INSPECTOR_FRAME_READY',
   FRAME_EVENT: 'ELEMENT_INSPECTOR_FRAME_EVENT',
   FRAME_COMMAND: 'ELEMENT_INSPECTOR_FRAME_COMMAND',
   TOP_EVENT: 'ELEMENT_INSPECTOR_TOP_EVENT',
@@ -23,7 +24,8 @@ function createBackgroundHarness(options = {}) {
     ok: true,
     active: true,
     activeFrameId: 7,
-    selectedFrameId: 7
+    selectedFrameId: 7,
+    currentSelectionId: 'selection-7'
   };
 
   const chrome = {
@@ -122,7 +124,8 @@ test('recovers active and selected frame routing for countdown, navigation, edit
         ok: true,
         active: true,
         activeFrameId: 5,
-        selectedFrameId: 7
+        selectedFrameId: 7,
+        currentSelectionId: 'selection-7'
       }
     });
     const message = {
@@ -198,7 +201,8 @@ test('does not reactivate an inactive session during recovery', () => {
       ok: true,
       active: false,
       activeFrameId: 5,
-      selectedFrameId: 7
+      selectedFrameId: 7,
+      currentSelectionId: 'selection-7'
     }
   });
   const outcome = harness.dispatch({
@@ -210,4 +214,184 @@ test('does not reactivate an inactive session during recovery', () => {
   assert.equal(outcome.response?.ok, false);
   assert.equal(outcome.response?.ignored, true);
   assert.equal(harness.sentMessages.some(item => item.message.type === MESSAGE.TOP_EVENT), false);
+});
+
+test('invalidates a removed selection across background and all frames', () => {
+  const harness = createBackgroundHarness({
+    stateResponse: {
+      ok: true,
+      active: true,
+      activeFrameId: 7,
+      selectedFrameId: 7,
+      currentSelectionId: 'selection-7'
+    }
+  });
+  const invalidation = harness.dispatch({
+    type: MESSAGE.FRAME_EVENT,
+    event: {
+      kind: 'selectionInvalidated',
+      selectionId: 'selection-7',
+      message: '固定した要素がページから削除されました。'
+    }
+  }, { frameId: 7 });
+
+  assert.equal(invalidation.returnValue, true);
+  assert.equal(invalidation.response?.ok, true);
+  assert.ok(harness.sentMessages.some(item =>
+    item.frameId === null &&
+    item.message.type === MESSAGE.FRAME_COMMAND &&
+    item.message.command === 'START_PICKING'
+  ));
+  assert.ok(harness.sentMessages.some(item =>
+    item.frameId === 0 &&
+    item.message.type === MESSAGE.TOP_EVENT &&
+    item.message.event.kind === 'selectionInvalidated'
+  ));
+
+  const navigation = harness.dispatch({
+    type: MESSAGE.TOP_COMMAND,
+    command: 'NAVIGATE',
+    direction: 'parent'
+  });
+  assert.equal(navigation.response?.ok, false);
+  assert.equal(navigation.response?.error, 'no selected frame');
+});
+
+test('ignores a stale invalidation from an older selection in the same frame', () => {
+  const harness = createBackgroundHarness({
+    stateResponse: {
+      ok: true,
+      active: true,
+      activeFrameId: 7,
+      selectedFrameId: 7,
+      currentSelectionId: 'selection-new'
+    }
+  });
+  const invalidation = harness.dispatch({
+    type: MESSAGE.FRAME_EVENT,
+    event: {
+      kind: 'selectionInvalidated',
+      selectionId: 'selection-old',
+      message: 'stale invalidation'
+    }
+  }, { frameId: 7 });
+
+  assert.equal(invalidation.response?.ok, false);
+  assert.equal(invalidation.response?.ignored, true);
+  assert.equal(harness.sentMessages.some(item =>
+    item.frameId === null && item.message.command === 'START_PICKING'
+  ), false);
+
+  const navigation = harness.dispatch({
+    type: MESSAGE.TOP_COMMAND,
+    command: 'NAVIGATE',
+    direction: 'parent'
+  });
+  assert.equal(navigation.response?.ok, true);
+});
+
+test('invalidates the selected child frame when its content script reloads', () => {
+  const harness = createBackgroundHarness();
+  harness.dispatch({
+    type: MESSAGE.FRAME_EVENT,
+    event: { kind: 'selected', selectionId: 'selection-7', result: {} }
+  }, { frameId: 7 });
+  const messageOffset = harness.sentMessages.length;
+
+  const ready = harness.dispatch({ type: MESSAGE.FRAME_READY }, { frameId: 7 });
+
+  assert.equal(ready.response?.ok, true);
+  const newMessages = harness.sentMessages.slice(messageOffset);
+  assert.ok(newMessages.some(item =>
+    item.frameId === null && item.message.command === 'START_PICKING'
+  ));
+  assert.ok(newMessages.some(item =>
+    item.frameId === 0 &&
+    item.message.type === MESSAGE.TOP_EVENT &&
+    item.message.event.kind === 'selectionInvalidated'
+  ));
+  const navigation = harness.dispatch({
+    type: MESSAGE.TOP_COMMAND,
+    command: 'NAVIGATE',
+    direction: 'parent'
+  });
+  assert.equal(navigation.response?.ok, false);
+});
+
+test('clears stale selection routing when the top frame reloads', () => {
+  const harness = createBackgroundHarness();
+  harness.dispatch({
+    type: MESSAGE.FRAME_EVENT,
+    event: { kind: 'selected', selectionId: 'selection-7', result: {} }
+  }, { frameId: 7 });
+
+  const ready = harness.dispatch({ type: MESSAGE.FRAME_READY }, { frameId: 0 });
+
+  assert.equal(ready.response?.ok, true);
+  const navigation = harness.dispatch({
+    type: MESSAGE.TOP_COMMAND,
+    command: 'NAVIGATE',
+    direction: 'parent'
+  });
+  assert.equal(navigation.response?.ok, false);
+  assert.equal(navigation.response?.error, 'no selected frame');
+});
+
+test('broadcasts all-edit reset independently of the selected frame edit count', () => {
+  const harness = createBackgroundHarness();
+  const outcome = harness.dispatch({
+    type: MESSAGE.TOP_COMMAND,
+    command: 'RESET_ALL_EDITS'
+  });
+
+  assert.equal(outcome.response?.ok, true);
+  assert.ok(harness.sentMessages.some(item =>
+    item.frameId === null &&
+    item.message.type === MESSAGE.FRAME_COMMAND &&
+    item.message.command === 'RESET_ALL_EDITS'
+  ));
+});
+
+test('clears stale hover routing when the top frame reloads before selection', () => {
+  const harness = createBackgroundHarness({
+    stateResponse: {
+      ok: true,
+      active: true,
+      activeFrameId: 7,
+      selectedFrameId: null,
+      currentSelectionId: null
+    }
+  });
+  harness.dispatch({ type: MESSAGE.FRAME_EVENT, event: { kind: 'hover' } }, { frameId: 7 });
+
+  harness.dispatch({ type: MESSAGE.FRAME_READY }, { frameId: 0 });
+  const fix = harness.dispatch({
+    type: MESSAGE.TOP_COMMAND,
+    command: 'FIX_ACTIVE_HOVER'
+  });
+
+  assert.equal(fix.response?.ok, false);
+  assert.equal(fix.response?.error, 'no active frame');
+});
+
+test('clears stale hover routing when the hovered child frame reloads', () => {
+  const harness = createBackgroundHarness({
+    stateResponse: {
+      ok: true,
+      active: true,
+      activeFrameId: 7,
+      selectedFrameId: null,
+      currentSelectionId: null
+    }
+  });
+  harness.dispatch({ type: MESSAGE.FRAME_EVENT, event: { kind: 'hover' } }, { frameId: 7 });
+
+  harness.dispatch({ type: MESSAGE.FRAME_READY }, { frameId: 7 });
+  const fix = harness.dispatch({
+    type: MESSAGE.TOP_COMMAND,
+    command: 'FIX_ACTIVE_HOVER'
+  });
+
+  assert.equal(fix.response?.ok, false);
+  assert.equal(fix.response?.error, 'no active frame');
 });

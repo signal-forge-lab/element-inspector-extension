@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.14.2`
+`0.14.3`
 
 ## 起動
 
@@ -28,7 +28,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 同じアイコンをもう一度押すか、専用ウィンドウの閉じるボタンまたは`Esc`で終了します。
 
-Manifest V3のService Workerが停止・再起動した場合も、次の操作時にトップフレームから現在のactive状態と選択フレームを回収してセッションを継続します。この復元にStorageは使用しません。
+Manifest V3のService Workerが停止・再起動した場合も、次の操作時にトップフレームから現在のactive状態、選択フレーム、選択IDを回収してセッションを継続します。この復元にStorageは使用しません。
 
 ## 操作
 
@@ -240,6 +240,8 @@ XPathはブラウザ仕様上Shadow Root境界を越えないため、Shadow DOM
 
 編集結果は選択履歴を増やさず再解析され、JSONの`temporaryEdits`に編集前・指定値・適用後の値、対象数、コピー用CSSを出力します。対象識別用の一時属性はJSONから除外し、Resetまたは終了時に元の状態へ戻します。
 
+`全Reset`は、現在選択中のフレームに編集がない場合でも実行できます。別iframeやShadow Rootに残っている一時編集へ全フレームbroadcastを送るためです。
+
 ## 基本Accessibility / 限定イベント情報
 
 `A11y`タブでは、DOMから推定できる範囲で次を表示します。
@@ -283,6 +285,10 @@ Accessibility / 限定イベント解析
 ```
 
 iframe間の選択結果はBackground Service Workerを介してトップフレームへ集約します。nested iframeの経路は、親子フレーム間の`postMessage`ハンドシェイクで構築します。
+
+frame context handshakeはInspectorがactiveの間だけ動作します。子frameはactive化時に`HELLO`を送り、親frameもactive化時に直接の子frameへ`REQUEST_HELLO`を送るため、active化の順序に依存せずポーリングなしで経路を構築します。親が返す経路情報は各iframeの`tagName`と相対CSS Selectorだけに限定し、`name`、`title`、`src`は転送しません。tokenは認証情報ではなく相関IDとして扱い、直接の子frame照合、型、長さ、最大深度16の検証後に診断情報として使用します。
+
+固定した要素が削除された場合、または選択中のiframeが削除・再読み込み・移動した場合は、Backgroundが選択状態を無効化して全フレームを選択モードへ戻します。古いframeや古い選択IDから遅れて届いた通知は採用しません。
 
 ## JSON出力
 
@@ -364,6 +370,7 @@ JSONタブの`Export profile`で次を切り替えます。
 - パネル幅・高さ、表示密度、ピン留め、比較内容を永続保存しません。
 - 一時編集、Undo履歴、Accessibility・イベント解析結果を永続保存しません。
 - 一時編集用の属性とスタイル層はResetまたはInspector終了時に撤去します。
+- frame context handshakeはactive中だけ実行し、直接の親子frame経路と妥当なmessage shapeだけを受理します。
 
 Content Scriptは`<all_urls>`へ宣言されます。これはツールバー起動後に、トップページとiframe内の対象要素を選択・解析するためです。
 

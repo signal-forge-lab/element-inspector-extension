@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.2`
+`0.14.3`
 
 ## 構成
 
@@ -21,6 +21,7 @@ element_inspector_extension/
 ├─ assets/icons/main-icon.png
 ├─ assets/icons/main-icon-{16,32,48,128}.png
 ├─ tests/background.test.js
+├─ tests/content-runtime.test.js
 └─ tests/inspector.test.js
 ```
 
@@ -90,14 +91,16 @@ ELEMENT_INSPECTOR_TOP_COMMAND
 {
   active: false,
   activeFrameId: null,
-  selectedFrameId: null
+  selectedFrameId: null,
+  selectedSelectionId: null
 }
 ```
 
 - `activeFrameId`: 最後にホバー情報を送ったフレーム
 - `selectedFrameId`: 固定中の要素を所有するフレーム
+- `selectedSelectionId`: 固定中の選択ID。同一frameから遅れて届いた古い無効化通知を破棄するために使用
 
-Service Worker再起動後でも、ツールバークリック時にトップフレームへ現在状態を問い合わせてから反転します。さらに、再起動後の最初の`FRAME_EVENT`、`TOP_COMMAND`、子フレームの`FRAME_READY`でもトップフレームへ`QUERY_STATE`を送り、`active`、`activeFrameId`、`selectedFrameId`を復元してから元のメッセージを一度だけ処理します。
+Service Worker再起動後でも、ツールバークリック時にトップフレームへ現在状態を問い合わせてから反転します。さらに、再起動後の最初の`FRAME_EVENT`、`TOP_COMMAND`、子フレームの`FRAME_READY`でもトップフレームへ`QUERY_STATE`を送り、`active`、`activeFrameId`、`selectedFrameId`、`currentSelectionId`を復元してから元のメッセージを一度だけ処理します。
 
 同じタブで復元要求が重なった場合は1回の問い合わせへ集約します。復元に失敗した`TOP_COMMAND`は`ok: false`を返し、トップフレームUIが保留状態を解除してエラーを表示します。永続Storageは使用しません。
 
@@ -133,11 +136,13 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 
 ### iframe経路
 
-各子フレームは親へ`postMessage`で`HELLO`を送り、親Content Scriptが`event.source`と`iframe.contentWindow`を照合します。
+各子フレームはInspector active中だけ親へ`postMessage`で`HELLO`を送り、親Content Scriptが`event.source`と直接の`iframe.contentWindow`を照合します。親もactive化時に直接の子frameへ`REQUEST_HELLO`を送るため、親・子どちらが先にactive化しても、後からactiveになった側のイベントでhandshakeを成立させます。タイマーやポーリングは使用しません。
 
-親はiframe要素のCSS Selectorを生成し、既存の親経路へ追加して子へ返します。nested iframeで親経路の到着が遅れた場合は、登録済みの子フレームへ更新済みContextを再送します。
+親はiframe要素の`tagName`とCSS Selectorだけを既存の親経路へ追加して子へ返します。`name`、`title`、`src`は返しません。nested iframeで親経路の到着が遅れた場合は、登録済みの子フレームへ更新済みContextを再送します。
 
-この経路は診断情報であり、機密情報やDOM内容の転送には使用しません。
+この`postMessage`経路はページから観測可能であり、tokenは認証境界ではありません。tokenは最大128文字の相関IDとしてのみ扱い、contextは最大深度16、path長一致、`iframe` / `frame`、最大2,048文字のSelectorというshapeを検証します。消滅した子frameのWindow参照は再送時にMapから削除します。
+
+固定要素の切断、子frameの`pagehide`、選択frameの新しい`FRAME_READY`を`selectionInvalidated`へ統一します。Backgroundはframe IDとselection IDの両方が現在値と一致する場合だけ選択状態を解除し、全フレームへ`START_PICKING`をbroadcastします。トップframe再読み込み時も古い選択ルーティングを破棄します。
 
 ## `inspector.js`
 
@@ -468,7 +473,7 @@ fixed
 - 一時編集はセッション固有属性と専用Stylesheetだけを使用し、終了時に元へ戻す
 - 結果をBackgroundへ永続保存しない
 - パネル幅・密度・履歴・ピンをStorageへ保存しない
-- iframe context handshakeはフレーム経路だけを扱う
+- iframe context handshakeはactive中の直接の親子frameだけを扱い、受信値を未信頼としてshape検証する
 - クリップボード・ダウンロードはユーザー操作時だけ実行する
 
 ## テスト
@@ -485,8 +490,9 @@ npm test
 - Locator一意性
 - 兄弟・子要素ナビゲーションmetadata
 - Manifestの全フレーム設定
-- Background routing契約とService Worker再起動後の状態復元
-- iframe context handshake
+- Background routing契約、Service Worker再起動後の状態復元、frame再読み込み時のselection invalidation
+- iframe context handshakeのactive制限、payload縮小、message検証、消滅frame参照のprune
+- 別frameに編集が残る場合の全Reset操作
 - 新UIのタブ・ドラッグ・Reduced Motion
 - 固定Hierarchy、履歴一覧、SVG閉じるアイコン
 - Calm Hybridトークン、サイズ別PNGアイコン、全方向下側リサイズ、密度切替

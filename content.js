@@ -1,12 +1,15 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.2';
+  const EXTENSION_VERSION = '0.14.3';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
   const MAX_HISTORY_ENTRIES = 100;
   const MAX_PINNED_ENTRIES = 4;
+  const MAX_FRAME_CONTEXT_DEPTH = 16;
+  const MAX_FRAME_CONTEXT_TOKEN_LENGTH = 128;
+  const MAX_FRAME_SELECTOR_LENGTH = 2048;
   const MIN_PANEL_WIDTH = 360;
   const MIN_PANEL_HEIGHT = 440;
   const DEFAULT_PANEL_WIDTH = 468;
@@ -262,18 +265,47 @@
 
   function buildFramePathItem(frameElement) {
     const css = globalThis.ElementInspector?.generateCssLocator?.(frameElement);
+    const selector = typeof css?.value === 'string' && css.value.length <= MAX_FRAME_SELECTOR_LENGTH
+      ? css.value
+      : null;
     return {
       tagName: frameElement.localName || 'iframe',
-      css: css?.value || null,
-      name: frameElement.getAttribute('name') || null,
-      title: frameElement.getAttribute('title') || null,
-      src: frameElement.getAttribute('src') || null
+      css: selector
     };
   }
 
+  function isValidFrameContextToken(token) {
+    return typeof token === 'string' && token.length > 0 && token.length <= MAX_FRAME_CONTEXT_TOKEN_LENGTH;
+  }
+
+  function sanitizeFramePathItem(item) {
+    if (!item || typeof item !== 'object') return null;
+    const tagName = item.tagName === 'frame' ? 'frame' : item.tagName === 'iframe' ? 'iframe' : null;
+    if (!tagName) return null;
+    if (item.css !== null && item.css !== undefined) {
+      if (typeof item.css !== 'string' || item.css.length > MAX_FRAME_SELECTOR_LENGTH) return null;
+    }
+    return {
+      tagName,
+      css: typeof item.css === 'string' ? item.css : null
+    };
+  }
+
+  function normalizeFrameContext(context) {
+    if (!context || typeof context !== 'object') return null;
+    if (!Number.isInteger(context.depth) || context.depth < 1 || context.depth > MAX_FRAME_CONTEXT_DEPTH) {
+      return null;
+    }
+    if (!Array.isArray(context.path) || context.path.length !== context.depth) return null;
+    const path = context.path.map(sanitizeFramePathItem);
+    if (path.some(item => !item)) return null;
+    return { depth: context.depth, path };
+  }
+
   function respondWithFrameContext(sourceWindow, token) {
+    if (!frameState.active || !isValidFrameContextToken(token)) return false;
     const frameElement = findFrameElement(sourceWindow);
-    if (!frameElement) return;
+    if (!frameElement) return false;
     const context = {
       depth: frameState.frameContext.depth + 1,
       path: [
@@ -281,27 +313,47 @@
         buildFramePathItem(frameElement)
       ]
     };
-    sourceWindow.postMessage({
-      channel: FRAME_CHANNEL,
-      type: 'CONTEXT',
-      token,
-      context
-    }, '*');
+    if (context.depth > MAX_FRAME_CONTEXT_DEPTH) return false;
+    try {
+      sourceWindow.postMessage({
+        channel: FRAME_CHANNEL,
+        type: 'CONTEXT',
+        token,
+        context
+      }, '*');
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function refreshChildFrameContexts() {
     for (const [sourceWindow, token] of frameState.childFrameRequests) {
-      respondWithFrameContext(sourceWindow, token);
+      if (!respondWithFrameContext(sourceWindow, token)) {
+        frameState.childFrameRequests.delete(sourceWindow);
+      }
     }
   }
 
   function onFrameContextMessage(event) {
     const data = event.data;
-    if (!data || data.channel !== FRAME_CHANNEL) return;
+    if (!frameState.active || !data || typeof data !== 'object' || data.channel !== FRAME_CHANNEL) return;
 
-    if (data.type === 'HELLO' && data.token && event.source) {
+    if (
+      data.type === 'REQUEST_HELLO' &&
+      !frameState.isTopFrame &&
+      event.source === window.parent
+    ) {
+      requestFrameContext();
+      return;
+    }
+
+    if (data.type === 'HELLO' && isValidFrameContextToken(data.token) && event.source) {
+      if (!findFrameElement(event.source)) return;
       frameState.childFrameRequests.set(event.source, data.token);
-      respondWithFrameContext(event.source, data.token);
+      if (!respondWithFrameContext(event.source, data.token)) {
+        frameState.childFrameRequests.delete(event.source);
+      }
       return;
     }
 
@@ -309,23 +361,34 @@
       data.type === 'CONTEXT' &&
       event.source === window.parent &&
       data.token === frameState.frameToken &&
-      data.context
+      isValidFrameContextToken(data.token)
     ) {
-      frameState.frameContext = {
-        depth: Number.isInteger(data.context.depth) ? data.context.depth : 0,
-        path: Array.isArray(data.context.path) ? data.context.path : []
-      };
+      const context = normalizeFrameContext(data.context);
+      if (!context) return;
+      frameState.frameContext = context;
       refreshChildFrameContexts();
     }
   }
 
   function requestFrameContext() {
-    if (frameState.isTopFrame) return;
+    if (!frameState.active || frameState.isTopFrame) return;
     window.parent.postMessage({
       channel: FRAME_CHANNEL,
       type: 'HELLO',
       token: frameState.frameToken
     }, '*');
+  }
+
+  function requestChildFrameContexts() {
+    if (!frameState.active) return;
+    for (const frameElement of document.querySelectorAll('iframe, frame')) {
+      try {
+        frameElement.contentWindow?.postMessage({
+          channel: FRAME_CHANNEL,
+          type: 'REQUEST_HELLO'
+        }, '*');
+      } catch {}
+    }
   }
 
   function buildFrameInfo() {
@@ -356,6 +419,30 @@
   function startFramePicking(mode = 'picking') {
     frameState.mode = mode;
     clearFrameSelection();
+  }
+
+  function invalidateCurrentSelection(message) {
+    if (!frameState.active || frameState.mode !== 'fixed' || !isElement(frameState.selectedElement)) {
+      return false;
+    }
+    const selectionId = frameState.currentSelectionId;
+    if (selectionId) {
+      frameState.selectionRegistry.delete(selectionId);
+      frameState.pinnedSelectionIds.delete(selectionId);
+    }
+    startFramePicking('picking');
+    emitFrameEvent({
+      kind: 'selectionInvalidated',
+      status: 'error',
+      selectionId,
+      message
+    });
+    return true;
+  }
+
+  function onWindowPageHide() {
+    if (frameState.isTopFrame) return;
+    invalidateCurrentSelection('固定した要素を含むiframeがページから削除または移動しました。');
   }
 
   function rememberSelection(selectionId, element) {
@@ -914,12 +1001,7 @@
     if (!isElement(element) || !element.isConnected) {
       frameState.marker.style.display = 'none';
       if (frameState.mode === 'fixed' && frameState.selectedElement && !frameState.selectedElement.isConnected) {
-        startFramePicking('picking');
-        emitFrameEvent({
-          kind: 'status',
-          status: 'error',
-          message: '固定した要素がページから削除されました。'
-        });
+        invalidateCurrentSelection('固定した要素がページから削除されました。');
       }
     } else {
       const rect = element.getBoundingClientRect();
@@ -1260,7 +1342,7 @@
     if (ui.editPropertySelect) ui.editPropertySelect.disabled = !hasResult;
     if (ui.editUndoButton) ui.editUndoButton.disabled = !edits?.undoAvailable;
     if (ui.editResetCurrentButton) ui.editResetCurrentButton.disabled = !edits?.active;
-    if (ui.editResetAllButton) ui.editResetAllButton.disabled = !(edits?.frameEditCount > 0);
+    if (ui.editResetAllButton) ui.editResetAllButton.disabled = false;
     if (ui.editCopyCssButton) ui.editCopyCssButton.disabled = !edits?.allCssText;
     if (ui.editSummary) {
       const propertyCount = edits?.declarations?.length || 0;
@@ -1692,6 +1774,16 @@
     }
   }
 
+  function clearTopSelectionState() {
+    ui.result = null;
+    ui.activeFrameId = null;
+    ui.selectedFrameId = null;
+    ui.currentSelectionId = null;
+    ui.pendingHistoryIndex = null;
+    ui.ancestorExport = null;
+    ui.ancestorExportPending = false;
+  }
+
   function beginPicking() {
     clearUICountdown();
     ui.result = null;
@@ -1884,6 +1976,16 @@
 
   function handleTopEvent(event) {
     if (!ui.panel || !event) return;
+
+    if (event.kind === 'selectionInvalidated') {
+      clearUICountdown();
+      clearTopSelectionState();
+      if (ui.targetName) ui.targetName.textContent = 'Select an element';
+      setUIMode('picking');
+      setUIStatus(event.message || '固定した要素がページから削除されました。', 'error');
+      renderUI();
+      return;
+    }
 
     if (event.kind === 'ancestorExport') {
       if (event.selectionId !== ui.currentSelectionId || !event.result) return;
@@ -3245,16 +3347,20 @@
       document.removeEventListener('keydown', onDocumentKeyDown, true);
       document.removeEventListener('readystatechange', mountFrameRootWhenReady);
       window.removeEventListener('resize', keepPanelInViewport);
+      window.removeEventListener('pagehide', onWindowPageHide);
+      frameState.frameContext = { depth: 0, path: [] };
       return;
     }
 
     startFramePicking('picking');
     requestFrameContext();
+    requestChildFrameContexts();
     document.addEventListener('pointermove', onDocumentPointerMove, true);
     document.addEventListener('focusin', onDocumentFocusIn, true);
     document.addEventListener('click', onDocumentClick, true);
     document.addEventListener('keydown', onDocumentKeyDown, true);
     if (frameState.isTopFrame) window.addEventListener('resize', keepPanelInViewport);
+    else window.addEventListener('pagehide', onWindowPageHide);
     mountFrameRootWhenReady();
   }
 
@@ -3350,6 +3456,9 @@
           : null,
         selectedFrameId: frameState.isTopFrame && Number.isInteger(ui.selectedFrameId)
           ? ui.selectedFrameId
+          : null,
+        currentSelectionId: frameState.isTopFrame && typeof ui.currentSelectionId === 'string'
+          ? ui.currentSelectionId
           : null
       });
       return false;

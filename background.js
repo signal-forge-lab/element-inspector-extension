@@ -23,7 +23,8 @@
       tabStates.set(tabId, {
         active: false,
         activeFrameId: null,
-        selectedFrameId: null
+        selectedFrameId: null,
+        selectedSelectionId: null
       });
     }
     return tabStates.get(tabId);
@@ -61,6 +62,9 @@
       state.selectedFrameId = state.active && Number.isInteger(response.selectedFrameId)
         ? response.selectedFrameId
         : null;
+      state.selectedSelectionId = state.active && typeof response.currentSelectionId === 'string'
+        ? response.currentSelectionId
+        : null;
       for (const pendingCallback of callbacks) pendingCallback(state, null);
     });
   }
@@ -81,11 +85,50 @@
     sendToFrame(tabId, 0, { type: MESSAGE.TOP_EVENT, event });
   }
 
+  function startTabSelectionMode(tabId, state, command) {
+    state.activeFrameId = null;
+    state.selectedFrameId = null;
+    state.selectedSelectionId = null;
+    broadcastToFrames(tabId, {
+      type: MESSAGE.FRAME_COMMAND,
+      command
+    });
+  }
+
+  function respondToFrameReady(tabId, frameId, state, sendResponse) {
+    const selectedFrameReloaded = state.active && Number.isInteger(state.selectedFrameId) &&
+      (frameId === 0 || state.selectedFrameId === frameId);
+    if (selectedFrameReloaded) {
+      const selectionId = state.selectedSelectionId;
+      startTabSelectionMode(tabId, state, 'START_PICKING');
+      if (frameId !== 0) {
+        sendTopEvent(tabId, {
+          kind: 'selectionInvalidated',
+          status: 'error',
+          selectionId,
+          frameId,
+          message: '固定した要素を含むiframeが再読み込みまたは移動しました。'
+        });
+      }
+    } else if (state.active && frameId === 0) {
+      startTabSelectionMode(tabId, state, 'START_PICKING');
+    } else if (state.activeFrameId === frameId) {
+      state.activeFrameId = null;
+    }
+    sendResponse({
+      ok: true,
+      active: state.active,
+      frameId,
+      isTopFrame: frameId === 0
+    });
+  }
+
   function setTabActive(tabId, active) {
     const state = getTabState(tabId);
     state.active = active;
     state.activeFrameId = null;
     state.selectedFrameId = null;
+    state.selectedSelectionId = null;
     broadcastToFrames(tabId, { type: MESSAGE.SET_ACTIVE, active });
   }
 
@@ -113,23 +156,22 @@
     if (message?.type === MESSAGE.FRAME_READY) {
       if (!tabStates.has(tabId) && frameId !== 0) {
         recoverTabState(tabId, (recoveredState, error) => {
-          sendResponse({
-            ok: !error,
-            error: error || undefined,
-            active: Boolean(recoveredState?.active),
-            frameId,
-            isTopFrame: false
-          });
+          if (error || !recoveredState) {
+            sendResponse({
+              ok: false,
+              error: error || 'top frame state unavailable',
+              active: false,
+              frameId,
+              isTopFrame: false
+            });
+            return;
+          }
+          respondToFrameReady(tabId, frameId, recoveredState, sendResponse);
         });
         return true;
       }
       const state = getTabState(tabId);
-      sendResponse({
-        ok: true,
-        active: state.active,
-        frameId,
-        isTopFrame: frameId === 0
-      });
+      respondToFrameReady(tabId, frameId, state, sendResponse);
       return false;
     }
 
@@ -170,11 +212,24 @@
       if (event.kind === 'selected') {
         state.activeFrameId = frameId;
         state.selectedFrameId = frameId;
+        state.selectedSelectionId = typeof event.selectionId === 'string' ? event.selectionId : null;
         broadcastToFrames(tabId, {
           type: MESSAGE.FRAME_COMMAND,
           command: 'SYNC_SELECTED',
           selectedFrameId: frameId
         });
+      }
+
+      if (event.kind === 'selectionInvalidated') {
+        if (
+          state.selectedFrameId !== frameId ||
+          typeof event.selectionId !== 'string' ||
+          state.selectedSelectionId !== event.selectionId
+        ) {
+          sendResponse({ ok: false, ignored: true });
+          return false;
+        }
+        startTabSelectionMode(tabId, state, 'START_PICKING');
       }
 
       sendTopEvent(tabId, event);
@@ -192,12 +247,7 @@
       }
 
       if (command === 'START_PICKING' || command === 'START_COUNTDOWN') {
-        state.activeFrameId = null;
-        state.selectedFrameId = null;
-        broadcastToFrames(tabId, {
-          type: MESSAGE.FRAME_COMMAND,
-          command
-        });
+        startTabSelectionMode(tabId, state, command);
         sendResponse({ ok: true });
         return false;
       }
