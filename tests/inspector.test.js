@@ -217,6 +217,62 @@ test('limits selected and control outerHTML to 5000 characters by default', () =
   assert.equal(result.outerHTML.length, 5000);
 });
 
+test('limits standard JSON text fields and reports truncation metadata', () => {
+  const textContent = `  ${'long text '.repeat(900)}  `;
+  const button = new MockElement('button', {}, { textContent });
+  const result = inspector.inspectElement(button, { maxTextLength: 120 });
+  const normalizedLength = textContent.replace(/\s+/g, ' ').trim().length;
+
+  assert.equal(result.selectedText.length, 120);
+  assert.equal(result.text.length, 120);
+  assert.deepEqual(result.selectedTextMeta, {
+    truncated: true,
+    originalLength: normalizedLength,
+    limit: 120
+  });
+  assert.deepEqual(result.textMeta, result.selectedTextMeta);
+});
+
+test('uses a 5000-character default text limit and reports untruncated short text', () => {
+  assert.equal(inspector.DEFAULT_MAX_TEXT_LENGTH, 5000);
+  const longElement = new MockElement('div', {}, { textContent: 'x'.repeat(7000) });
+  const longResult = inspector.inspectElement(longElement);
+  assert.equal(longResult.selectedText.length, 5000);
+  assert.deepEqual(longResult.selectedTextMeta, {
+    truncated: true,
+    originalLength: 7000,
+    limit: 5000
+  });
+
+  const shortElement = new MockElement('div', {}, { textContent: '  short text  ' });
+  const shortResult = inspector.inspectElement(shortElement);
+  assert.equal(shortResult.selectedText, 'short text');
+  assert.deepEqual(shortResult.selectedTextMeta, {
+    truncated: false,
+    originalLength: 10,
+    limit: 5000
+  });
+});
+
+test('limits ancestor-detail text without changing descendant scope', () => {
+  const parent = new MockElement('section', {}, { textContent: 'parent '.repeat(100) });
+  const selected = parent.appendChild(new MockElement('button', {}, { textContent: 'selected '.repeat(100) }));
+  selected.appendChild(new MockElement('span', {}, { textContent: 'direct child' }));
+
+  const result = inspector.buildAncestorExport(selected, {
+    maxAncestorDepth: 8,
+    maxTextLength: 80
+  });
+
+  assert.equal(result.selected.text.length, 80);
+  assert.equal(result.selected.textMeta.truncated, true);
+  assert.equal(result.selected.textMeta.limit, 80);
+  assert.equal(result.ancestors[0].text.length, 80);
+  assert.equal(result.ancestors[0].textMeta.truncated, true);
+  assert.equal(result.directChildren.length, 1);
+  assert.equal(result.scope.descendantsIncluded, false);
+});
+
 test('rejects a missing DOM element', () => {
   assert.throws(() => inspector.inspectElement(null), /対象要素を取得できません/);
 });
@@ -579,10 +635,10 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.14.3');
+  assert.equal(manifest.version, '0.14.4');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.14.3');
+  assert.equal(pkg.version, '0.14.4');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',

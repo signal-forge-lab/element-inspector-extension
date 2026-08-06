@@ -4,6 +4,7 @@
   const CONTROL_SELECTOR = 'button, [role="button"], a, [tabindex]';
   const DEFAULT_MAX_ANCESTOR_DEPTH = 8;
   const DEFAULT_MAX_OUTER_HTML_LENGTH = 5000;
+  const DEFAULT_MAX_TEXT_LENGTH = 5000;
   const MAX_SELECTOR_DEPTH = 12;
   const MAX_CHILD_SUMMARIES = 80;
   const MAX_EVENT_HANDLER_PREVIEW = 320;
@@ -58,6 +59,21 @@
 
   function normalizeText(value) {
     return String(value || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function createTextSnapshot(value, maxLength = DEFAULT_MAX_TEXT_LENGTH) {
+    const normalized = normalizeText(value);
+    const limit = Number.isInteger(maxLength)
+      ? Math.max(0, maxLength)
+      : DEFAULT_MAX_TEXT_LENGTH;
+    return {
+      value: normalized.slice(0, limit),
+      meta: {
+        truncated: normalized.length > limit,
+        originalLength: normalized.length,
+        limit
+      }
+    };
   }
 
   function booleanAttributeState(element, attributeName, propertyName = attributeName) {
@@ -565,14 +581,16 @@
       : `${openingTag}…</${tagName}>`;
   }
 
-  function inspectElementDetail(element) {
+  function inspectElementDetail(element, options = {}) {
     if (!isDomElement(element)) throw new Error('対象要素を取得できません');
     const css = generateCssLocator(element);
     const xpath = generateXPathLocator(element);
+    const textSnapshot = createTextSnapshot(element.textContent, options.maxTextLength);
     return {
       tagName: getTagName(element),
       attributes: attributesToObject(element),
-      text: normalizeText(element.textContent),
+      text: textSnapshot.value,
+      textMeta: textSnapshot.meta,
       rect: getRoundedRect(element),
       shallowOuterHTML: createShallowOuterHTML(element),
       locators: {
@@ -593,6 +611,9 @@
     const ancestorLimit = Number.isInteger(options.maxAncestorDepth)
       ? Math.max(1, options.maxAncestorDepth)
       : DEFAULT_MAX_ANCESTOR_DEPTH;
+    const maxTextLength = Number.isInteger(options.maxTextLength)
+      ? Math.max(0, options.maxTextLength)
+      : DEFAULT_MAX_TEXT_LENGTH;
     const navigation = getNavigationState(selected);
     const ancestors = [];
     let current = getComposedParent(selected);
@@ -601,14 +622,14 @@
       ancestors.push({
         depth,
         relation: depth === 1 ? 'parent' : 'ancestor',
-        ...inspectElementDetail(current)
+        ...inspectElementDetail(current, { maxTextLength })
       });
       current = getComposedParent(current);
     }
 
     return {
       exportProfile: 'ancestor-detail',
-      selected: inspectElementDetail(selected),
+      selected: inspectElementDetail(selected, { maxTextLength }),
       directChildren: navigation.children,
       ancestors,
       scope: {
@@ -944,17 +965,23 @@
     const maxOuterHtmlLength = Number.isInteger(options.maxOuterHtmlLength)
       ? Math.max(0, options.maxOuterHtmlLength)
       : DEFAULT_MAX_OUTER_HTML_LENGTH;
+    const maxTextLength = Number.isInteger(options.maxTextLength)
+      ? Math.max(0, options.maxTextLength)
+      : DEFAULT_MAX_TEXT_LENGTH;
 
     const control = findControlElement(selected);
     const svg = findFirstSvg(control);
     const use = svg?.querySelector?.('use') || null;
     const css = generateCssLocator(selected);
     const xpath = generateXPathLocator(selected);
+    const selectedTextSnapshot = createTextSnapshot(selected.textContent, maxTextLength);
+    const controlTextSnapshot = createTextSnapshot(control.textContent, maxTextLength);
 
     return {
       selectedTag: getTagName(selected),
       selectedAttributes: attributesToObject(selected),
-      selectedText: normalizeText(selected.textContent),
+      selectedText: selectedTextSnapshot.value,
+      selectedTextMeta: selectedTextSnapshot.meta,
       selectedRect: getRoundedRect(selected),
       selectedOuterHTML: String(selected.outerHTML || '').slice(0, maxOuterHtmlLength),
 
@@ -962,7 +989,8 @@
       controlAttributes: attributesToObject(control),
       controlRect: getRoundedRect(control),
 
-      text: normalizeText(control.textContent),
+      text: controlTextSnapshot.value,
+      textMeta: controlTextSnapshot.meta,
 
       locators: {
         css,
@@ -1007,6 +1035,7 @@
     CONTROL_SELECTOR,
     DEFAULT_MAX_ANCESTOR_DEPTH,
     DEFAULT_MAX_OUTER_HTML_LENGTH,
+    DEFAULT_MAX_TEXT_LENGTH,
     attributesToObject,
     cssEscapeIdentifier,
     generateCssLocator,

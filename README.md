@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.14.3`
+`0.14.4`
 
 ## 起動
 
@@ -308,12 +308,22 @@ JSONタブの`Export profile`で次を切り替えます。
   "selectedTag": "button",
   "selectedAttributes": {},
   "selectedText": "保存",
+  "selectedTextMeta": {
+    "truncated": false,
+    "originalLength": 2,
+    "limit": 5000
+  },
   "selectedRect": {},
   "selectedOuterHTML": "<button>保存</button>",
   "controlTag": "button",
   "controlAttributes": {},
   "controlRect": {},
   "text": "保存",
+  "textMeta": {
+    "truncated": false,
+    "originalLength": 2,
+    "limit": 5000
+  },
   "locators": {
     "css": {
       "value": "[data-testid=\"save-button\"]",
@@ -355,6 +365,8 @@ JSONタブの`Export profile`で次を切り替えます。
 制限：
 
 - `selectedOuterHTML`と`outerHTML`は最大5,000文字
+- `selectedText`と`text`は空白正規化後の最大5,000文字。元の長さと切り詰め状態は`selectedTextMeta`／`textMeta`へ記録
+- `Ancestor detail`の選択要素と各先祖も`text`を最大5,000文字とし、同じ詳細内の`textMeta`へ記録
 - `ancestors`は最大8階層
 - 子要素一覧は最大80件
 - `Ancestor detail`の直下の子は概要のみ、孫以下は除外

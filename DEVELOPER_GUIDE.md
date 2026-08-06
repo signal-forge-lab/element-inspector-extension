@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.3`
+`0.14.4`
 
 ## 構成
 
@@ -103,6 +103,8 @@ ELEMENT_INSPECTOR_TOP_COMMAND
 Service Worker再起動後でも、ツールバークリック時にトップフレームへ現在状態を問い合わせてから反転します。さらに、再起動後の最初の`FRAME_EVENT`、`TOP_COMMAND`、子フレームの`FRAME_READY`でもトップフレームへ`QUERY_STATE`を送り、`active`、`activeFrameId`、`selectedFrameId`、`currentSelectionId`を復元してから元のメッセージを一度だけ処理します。
 
 同じタブで復元要求が重なった場合は1回の問い合わせへ集約します。復元に失敗した`TOP_COMMAND`は`ok: false`を返し、トップフレームUIが保留状態を解除してエラーを表示します。永続Storageは使用しません。
+
+トップフレームが`picking`または`countdown`へ移行する場合は、現在選択、選択フレーム、履歴移動の保留、Ancestor detail結果と生成中状態を`clearTopSelectionState()`で一括解除します。選択履歴とピン留めスナップショットは維持します。
 
 ## `content.js`
 
@@ -242,6 +244,8 @@ Styles UIはプロパティ名・値・一時編集値をクライアント側�
 ### Ancestor detail JSON
 
 `ElementInspector.buildAncestorExport()`は選択要素と親から最大8階層へ、同じ詳細構造のスナップショットを生成します。各詳細には属性、テキスト、座標、shallow HTML、Locator、Computed Styles、Box Model、Accessibility、限定イベント、Shadow情報を含めます。
+
+`inspectElement()`と`buildAncestorExport()`はDOMの`textContent`を空白正規化後に既定5,000文字へ制限します。既存の`selectedText`／`text`文字列を維持し、`truncated`、`originalLength`、`limit`をそれぞれ`selectedTextMeta`／`textMeta`へ追加します。Ancestor detailでは選択要素と各先祖の`textMeta`に同じ情報を保持します。
 
 トップフレームUIが`REQUEST_ANCESTOR_EXPORT`を選択中フレームへ送り、フレーム側でFrame情報と対象別の一時編集情報を追加して`ancestorExport`イベントとして返します。選択IDが変わった応答は採用しません。
 
@@ -486,6 +490,7 @@ npm test
 テスト対象：
 
 - DOMスナップショット
+- Standard / Ancestor detailのテキスト上限とtruncation metadata
 - CSS Selector / XPath / JS Path
 - Locator一意性
 - 兄弟・子要素ナビゲーションmetadata

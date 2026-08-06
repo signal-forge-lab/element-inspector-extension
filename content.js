@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.3';
+  const EXTENSION_VERSION = '0.14.4';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -1786,10 +1786,7 @@
 
   function beginPicking() {
     clearUICountdown();
-    ui.result = null;
-    ui.activeFrameId = null;
-    ui.selectedFrameId = null;
-    ui.currentSelectionId = null;
+    clearTopSelectionState();
     ui.targetName.textContent = 'Select an element';
     setUIMode('picking');
     setUIStatus('対象をホバーし、クリックして固定してください。');
@@ -1814,9 +1811,7 @@
     }
     const seconds = Math.min(60, Math.max(1, Number.parseInt(ui.delayInput.value, 10) || DEFAULT_DELAY_SECONDS));
     ui.delayInput.value = String(seconds);
-    ui.result = null;
-    ui.activeFrameId = null;
-    ui.selectedFrameId = null;
+    clearTopSelectionState();
     ui.countdownRemaining = seconds;
     ui.countdownDeadline = Date.now() + seconds * 1000;
     setUIMode('countdown');

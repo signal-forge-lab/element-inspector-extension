@@ -38,6 +38,8 @@ function createContentHarness(options = {}) {
         : null,
       refreshChildFrameContexts,
       handleTopEvent,
+      beginPicking,
+      toggleCountdown,
       onWindowPageHide: typeof onWindowPageHide === 'function'
         ? onWindowPageHide
         : null,
@@ -185,6 +187,58 @@ test('keeps all-frame reset enabled when the current frame has no edits', () => 
   });
 
   assert.equal(harness.api.ui.editResetAllButton.disabled, false);
+});
+
+test('clears stale ancestor JSON when returning to picking mode', () => {
+  const harness = createContentHarness();
+  Object.assign(harness.api.ui, {
+    targetName: { textContent: '' },
+    result: { selectedTag: 'button' },
+    activeFrameId: 3,
+    selectedFrameId: 7,
+    currentSelectionId: 'selection-7',
+    pendingHistoryIndex: 2,
+    ancestorExport: { exportProfile: 'ancestor-detail' },
+    ancestorExportPending: true,
+    history: [{ selectionId: 'selection-7' }],
+    pins: [{ pinId: 'pin-1' }]
+  });
+
+  harness.api.beginPicking();
+
+  assert.equal(harness.api.ui.result, null);
+  assert.equal(harness.api.ui.activeFrameId, null);
+  assert.equal(harness.api.ui.selectedFrameId, null);
+  assert.equal(harness.api.ui.currentSelectionId, null);
+  assert.equal(harness.api.ui.pendingHistoryIndex, null);
+  assert.equal(harness.api.ui.ancestorExport, null);
+  assert.equal(harness.api.ui.ancestorExportPending, false);
+  assert.equal(harness.api.ui.history.length, 1);
+  assert.equal(harness.api.ui.pins.length, 1);
+});
+
+test('clears stale ancestor JSON when starting countdown mode', () => {
+  const harness = createContentHarness();
+  Object.assign(harness.api.ui, {
+    delayInput: { value: '5' },
+    result: { selectedTag: 'button' },
+    activeFrameId: 3,
+    selectedFrameId: 7,
+    currentSelectionId: 'selection-7',
+    pendingHistoryIndex: 2,
+    ancestorExport: { exportProfile: 'ancestor-detail' },
+    ancestorExportPending: true
+  });
+
+  harness.api.toggleCountdown();
+
+  assert.equal(harness.api.ui.result, null);
+  assert.equal(harness.api.ui.activeFrameId, null);
+  assert.equal(harness.api.ui.selectedFrameId, null);
+  assert.equal(harness.api.ui.currentSelectionId, null);
+  assert.equal(harness.api.ui.pendingHistoryIndex, null);
+  assert.equal(harness.api.ui.ancestorExport, null);
+  assert.equal(harness.api.ui.ancestorExportPending, false);
 });
 
 test('emits selection invalidation when a fixed element is removed', () => {
