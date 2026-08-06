@@ -269,6 +269,50 @@ test('returns to picking without partial selection state when inspection throws'
   assert.match(status.event.message, /analysis failed/);
 });
 
+test('removes temporary edit attributes from nested SVG snapshot fields', () => {
+  const internalAttribute = 'data-ei-edit-test-token';
+  const harness = createContentHarness({
+    inspectResult: {
+      selectedTag: 'circle',
+      selectedAttributes: { [internalAttribute]: 'selected-edit', cx: '5' },
+      selectedOuterHTML: `<circle ${internalAttribute}="selected-edit" cx="5"></circle>`,
+      controlAttributes: { [internalAttribute]: 'control-edit' },
+      outerHTML: `<svg ${internalAttribute}="control-edit"></svg>`,
+      ancestors: [{ attributes: { [internalAttribute]: 'ancestor-edit' } }],
+      shadow: { depth: 0, hosts: [{ attributes: { [internalAttribute]: 'host-edit' } }] },
+      locators: {
+        css: { value: 'circle' },
+        xpath: { value: '//circle' },
+        jsPath: { value: 'document.querySelector("circle")' }
+      },
+      svg: {
+        attributes: { [internalAttribute]: 'svg-edit', viewBox: '0 0 10 10' },
+        useHref: null,
+        paths: [],
+        circles: [{ [internalAttribute]: 'circle-edit', cx: '5', cy: '5' }]
+      }
+    }
+  });
+  const target = new FakeElement({ connected: true });
+  harness.api.frameState.active = true;
+
+  harness.api.inspectAndSelect(target);
+
+  const selected = harness.runtimeMessages.find(message =>
+    message.type === MESSAGE.FRAME_EVENT && message.event?.kind === 'selected'
+  );
+  assert.ok(selected);
+  const result = selected.event.result;
+  assert.equal(Object.hasOwn(result.selectedAttributes, internalAttribute), false);
+  assert.equal(Object.hasOwn(result.controlAttributes, internalAttribute), false);
+  assert.equal(Object.hasOwn(result.ancestors[0].attributes, internalAttribute), false);
+  assert.equal(Object.hasOwn(result.shadow.hosts[0].attributes, internalAttribute), false);
+  assert.equal(Object.hasOwn(result.svg.attributes, internalAttribute), false);
+  assert.equal(Object.hasOwn(result.svg.circles[0], internalAttribute), false);
+  assert.doesNotMatch(result.selectedOuterHTML, new RegExp(internalAttribute));
+  assert.doesNotMatch(result.outerHTML, new RegExp(internalAttribute));
+});
+
 test('applies tab selection, panel visibility, and roving tabindex together', () => {
   const harness = createContentHarness();
   const overview = createTabButton('overview', { active: true });

@@ -635,10 +635,10 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.14.6');
+  assert.equal(manifest.version, '0.14.7');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.14.6');
+  assert.equal(pkg.version, '0.14.7');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -734,6 +734,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /XPath/);
   assert.match(content, /JS Path/);
   assert.match(content, /prefers-reduced-motion/);
+  assert.match(content, /@media \(prefers-reduced-motion: reduce\)[\s\S]*\.highlight-edge \{ animation: none; \}/);
+  assert.doesNotMatch(content, /@media \(prefers-reduced-motion: reduce\)[\s\S]*animation-duration:\s*4s/);
   assert.match(content, /prefers-reduced-transparency/);
   assert.match(content, /tabs button::after/);
   assert.match(content, /Prismora — Web Element Inspector/);

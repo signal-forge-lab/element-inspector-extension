@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.14.6`
+`0.14.7`
 
 ## 起動
 
@@ -59,7 +59,7 @@ Manifest V3のService Workerが停止・再起動した場合も、次の操作�
 - `Locators`でCSS Selector、XPath、JS Pathを確認・コピーします。
 - `JSON`で全結果をコピーまたはファイル保存します。
 - タブへフォーカス中は左右矢印で前後、`Home`で先頭、`End`で末尾へ移動できます。非表示の`Compare`は移動対象から除外されます。
-- `prefers-reduced-motion`、`prefers-reduced-transparency`、`prefers-contrast`へ対応します。
+- `prefers-reduced-motion`ではパネル出現と虹色アウトラインのアニメーションを停止し、`prefers-reduced-transparency`、`prefers-contrast`にも対応します。
 
 UIはプロジェクト内の`apple-design`スキルを設計基準として、即時フィードバック、1:1ドラッグ、視覚階層、抑制されたマテリアル表現を重視しています。`0.9.0`で採用したCalm Hybrid方針を維持し、明るいニュートラル面と濃いグラファイトのデータ表示面を組み合わせています。メインアイコンは256pxの透過PNG原画を正本とし、同じデザインをサイズ別PNGへ縮小しています。
 
@@ -383,6 +383,7 @@ JSONタブの`Export profile`で次を切り替えます。
 - パネル幅・高さ、表示密度、ピン留め、比較内容を永続保存しません。
 - 一時編集、Undo履歴、Accessibility・イベント解析結果を永続保存しません。
 - 一時編集用の属性とスタイル層はResetまたはInspector終了時に撤去します。
+- 一時編集用の内部属性は通常属性、先祖・Shadow Host、HTML文字列、SVG・circle属性スナップショットから除外してJSONへ出力します。
 - frame context handshakeはactive中だけ実行し、直接の親子frame経路と妥当なmessage shapeだけを受理します。
 
 Content Scriptは`<all_urls>`へ宣言されます。これはツールバー起動後に、トップページとiframe内の対象要素を選択・解析するためです。

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.6';
+  const EXTENSION_VERSION = '0.14.7';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -618,6 +618,8 @@
     removeAttribute(result.controlAttributes);
     for (const ancestor of result.ancestors || []) removeAttribute(ancestor.attributes);
     for (const host of result.shadow?.hosts || []) removeAttribute(host.attributes);
+    removeAttribute(result.svg?.attributes);
+    for (const circle of result.svg?.circles || []) removeAttribute(circle);
     const pattern = new RegExp(`\\s${attributeName}="[^"]*"`, 'g');
     result.selectedOuterHTML = String(result.selectedOuterHTML || '').replace(pattern, '');
     result.outerHTML = String(result.outerHTML || '').replace(pattern, '');
@@ -2793,9 +2795,9 @@
       }
       @media (prefers-reduced-motion: reduce) {
         .panel { animation: none; }
+        .highlight-edge { animation: none; }
         button { transition: none; }
         .tabs button::after { transition: none; }
-        .highlight-edge { animation-duration: 4s !important; }
       }
       @media (prefers-reduced-transparency: reduce) {
         .panel { background: #f4f6f8; backdrop-filter: none; -webkit-backdrop-filter: none; }

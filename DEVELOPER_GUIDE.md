@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.6`
+`0.14.7`
 
 ## 構成
 
@@ -302,7 +302,7 @@ Handler previewは最大320文字です。`addEventListener()`、フレームワ
 - タブは囲み型セグメントではなく下線型
 - フレーム情報と選択状態をヘッダへ集約
 - 閉じるアイコンはSVGをinline-flex中央配置
-- `prefers-reduced-motion`で動きを抑制
+- `prefers-reduced-motion`でパネル出現と虹色アウトラインのアニメーションを停止
 - `prefers-reduced-transparency`で不透明背景へ切替
 - `prefers-contrast`で境界を強化
 
@@ -398,7 +398,7 @@ editUndoStack: operation[]
 editStyleResources: Map<Document|ShadowRoot, resource>
 ```
 
-対象Elementにはセッション固有名の一時属性を付与します。元から同名属性が存在した場合は値を退避し、Resetまたは終了時に復元します。一時属性はDOMスナップショットとJSONから除外します。
+対象Elementにはセッション固有名の一時属性を付与します。元から同名属性が存在した場合は値を退避し、Resetまたは終了時に復元します。一時属性は選択・control・先祖・Shadow Hostの属性、HTML文字列、SVG属性、circle属性スナップショットから除外し、DOMスナップショットとJSONへ混入させません。
 
 ### 適用層
 
@@ -572,6 +572,7 @@ npm test
 - 通常ページではフレームバッジを表示せず、iframe選択時だけ`IFRAME · DEPTH n`がヘッダ内に収まること
 - 小さいビューポート
 - Reduced Motion
+- Reduced Motionで虹色アウトラインが静止すること
 - Reduced Transparency
 - High Contrast
 
