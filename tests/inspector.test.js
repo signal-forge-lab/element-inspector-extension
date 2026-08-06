@@ -635,10 +635,10 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.14.5');
+  assert.equal(manifest.version, '0.14.6');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.14.5');
+  assert.equal(pkg.version, '0.14.6');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -667,6 +667,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.equal(manifest.content_scripts[0].match_origin_as_fallback, true);
   assert.doesNotMatch(background, /contextMenus/);
   assert.match(background, /chrome\.action\.onClicked/);
+  assert.match(background, /\[Prismora\] unavailable on this page:/);
+  assert.doesNotMatch(background, /\[Element Inspector\]/);
   assert.match(background, /ELEMENT_INSPECTOR_FRAME_READY/);
   assert.match(background, /ELEMENT_INSPECTOR_QUERY_STATE/);
   assert.match(background, /ELEMENT_INSPECTOR_TOP_COMMAND/);

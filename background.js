@@ -136,7 +136,7 @@
     if (!Number.isInteger(tab?.id)) return;
     sendToFrame(tab.id, 0, { type: MESSAGE.QUERY_STATE }, (response, error) => {
       if (error) {
-        console.warn('[Element Inspector] unavailable on this page:', error);
+        console.warn('[Prismora] unavailable on this page:', error);
         return;
       }
       setTabActive(tab.id, !Boolean(response?.active));

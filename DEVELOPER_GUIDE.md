@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.5`
+`0.14.6`
 
 ## 構成
 
@@ -120,6 +120,8 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 - Document / open Shadow DOM階層移動
 - 一時CSS編集の適用・Undo・Reset
 - Backgroundとのメッセージ通信
+
+`inspectAndSelect()`はDOM解析、Frame情報、Locator context、一時編集スナップショットの生成を完了してから、`fixed`状態・選択Element・選択ID・履歴Registryを確定します。解析中に例外が発生した場合は部分的な選択状態を残さず`picking`へ戻し、スタックトレースではなくエラーメッセージだけをstatusイベントとして通知します。
 
 ### トップフレーム専用責務
 
@@ -550,6 +552,7 @@ npm test
 - fixed状態のままService Workerを停止・再起動し、次のhover / navigation / Edit / Ancestor detailが継続すること
 - countdown中のhover後にService Workerを再起動し、0秒時点で同じactive frameを固定できること
 - 復元不能時にAncestor detailのpending表示が解除され、UIへエラーが表示されること
+- DOM解析を意図的に失敗させた場合、fixed状態・選択ID・履歴Registryを残さずpickingへ戻ること
 
 ### UI
 

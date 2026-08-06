@@ -42,6 +42,7 @@ function createContentHarness(options = {}) {
       toggleCountdown,
       setActiveTab,
       renderPinnedComparisons,
+      inspectAndSelect,
       handleTabKeyDown: typeof handleTabKeyDown === 'function'
         ? handleTabKeyDown
         : null,
@@ -143,6 +144,23 @@ function createContentHarness(options = {}) {
     ElementInspector: {
       generateCssLocator() {
         return { value: options.frameSelector ?? null };
+      },
+      inspectElement() {
+        if (options.inspectError) throw new Error(options.inspectError);
+        return options.inspectResult || {
+          selectedTag: 'button',
+          selectedAttributes: {},
+          selectedOuterHTML: '<button></button>',
+          controlAttributes: {},
+          outerHTML: '<button></button>',
+          ancestors: [],
+          shadow: { depth: 0, hosts: [] },
+          locators: {
+            css: { value: 'button' },
+            xpath: { value: '//button' },
+            jsPath: { value: 'document.querySelector("button")' }
+          }
+        };
       }
     },
     globalThis: null
@@ -219,6 +237,36 @@ test('keeps all-frame reset enabled when the current frame has no edits', () => 
   });
 
   assert.equal(harness.api.ui.editResetAllButton.disabled, false);
+});
+
+test('returns to picking without partial selection state when inspection throws', () => {
+  const harness = createContentHarness({ inspectError: 'analysis failed' });
+  const target = new FakeElement({ connected: true });
+  Object.assign(harness.api.frameState, {
+    active: true,
+    mode: 'picking',
+    hoveredElement: target,
+    selectedElement: null,
+    currentSelectionId: null,
+    highlightedElement: target
+  });
+
+  assert.doesNotThrow(() => harness.api.inspectAndSelect(target));
+
+  assert.equal(harness.api.frameState.mode, 'picking');
+  assert.equal(harness.api.frameState.hoveredElement, null);
+  assert.equal(harness.api.frameState.selectedElement, null);
+  assert.equal(harness.api.frameState.currentSelectionId, null);
+  assert.equal(harness.api.frameState.selectionRegistry.size, 0);
+  assert.equal(harness.runtimeMessages.some(message =>
+    message.type === MESSAGE.FRAME_EVENT && message.event?.kind === 'selected'
+  ), false);
+  const status = harness.runtimeMessages.find(message =>
+    message.type === MESSAGE.FRAME_EVENT && message.event?.kind === 'status'
+  );
+  assert.ok(status);
+  assert.equal(status.event.status, 'error');
+  assert.match(status.event.message, /analysis failed/);
 });
 
 test('applies tab selection, panel visibility, and roving tabindex together', () => {

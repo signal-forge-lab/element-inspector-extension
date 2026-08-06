@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.5';
+  const EXTENSION_VERSION = '0.14.6';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -857,6 +857,27 @@
       return;
     }
 
+    let result;
+    try {
+      result = sanitizeTemporaryEditArtifacts(globalThis.ElementInspector.inspectElement(element));
+      result.frame = buildFrameInfo();
+      result.locators.context = {
+        frameRelative: !frameState.isTopFrame,
+        frameId: frameState.frameId,
+        framePath: frameState.frameContext.path,
+        shadowDepth: result.shadow?.depth || 0
+      };
+      result.temporaryEdits = buildTemporaryEditSnapshot(element);
+    } catch (error) {
+      startFramePicking('picking');
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        message: `要素の解析に失敗しました: ${error instanceof Error ? error.message : String(error)}`
+      });
+      return;
+    }
+
     frameState.mode = 'fixed';
     frameState.hoveredElement = element;
     frameState.selectedElement = element;
@@ -866,15 +887,6 @@
     frameState.currentSelectionId = selectionId;
     rememberSelection(selectionId, element);
 
-    const result = sanitizeTemporaryEditArtifacts(globalThis.ElementInspector.inspectElement(element));
-    result.frame = buildFrameInfo();
-    result.locators.context = {
-      frameRelative: !frameState.isTopFrame,
-      frameId: frameState.frameId,
-      framePath: frameState.frameContext.path,
-      shadowDepth: result.shadow?.depth || 0
-    };
-    result.temporaryEdits = buildTemporaryEditSnapshot(element);
     emitFrameEvent({
       kind: 'selected',
       reason,
