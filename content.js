@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.1';
+  const EXTENSION_VERSION = '0.14.2';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -161,6 +161,7 @@
     jsonSaveButton: null,
     jsonPreview: null,
     result: null,
+    activeFrameId: null,
     selectedFrameId: null,
     countdownTimer: null,
     countdownDeadline: 0,
@@ -232,9 +233,22 @@
   }
 
   function sendTopCommand(command, payload = {}) {
-    chrome.runtime.sendMessage({ type: MESSAGE.TOP_COMMAND, command, ...payload }, () => {
-      void chrome.runtime.lastError;
+    chrome.runtime.sendMessage({ type: MESSAGE.TOP_COMMAND, command, ...payload }, response => {
+      const runtimeError = chrome.runtime.lastError?.message || null;
+      if (!runtimeError && response?.ok !== false) return;
+      handleTopCommandFailure(command, runtimeError || response?.error || 'unknown command error');
     });
+  }
+
+  function handleTopCommandFailure(command, error) {
+    if (!frameState.isTopFrame || !ui.panel) return;
+    if (command === 'REQUEST_ANCESTOR_EXPORT') {
+      ui.ancestorExportPending = false;
+      ui.ancestorExport = null;
+    }
+    if (command === 'RESTORE_SELECTION') ui.pendingHistoryIndex = null;
+    setUIStatus(`操作を完了できませんでした: ${error}`, 'error');
+    renderUI();
   }
 
   function findFrameElement(sourceWindow) {
@@ -1681,6 +1695,7 @@
   function beginPicking() {
     clearUICountdown();
     ui.result = null;
+    ui.activeFrameId = null;
     ui.selectedFrameId = null;
     ui.currentSelectionId = null;
     ui.targetName.textContent = 'Select an element';
@@ -1708,6 +1723,7 @@
     const seconds = Math.min(60, Math.max(1, Number.parseInt(ui.delayInput.value, 10) || DEFAULT_DELAY_SECONDS));
     ui.delayInput.value = String(seconds);
     ui.result = null;
+    ui.activeFrameId = null;
     ui.selectedFrameId = null;
     ui.countdownRemaining = seconds;
     ui.countdownDeadline = Date.now() + seconds * 1000;
@@ -1879,6 +1895,7 @@
     }
 
     if (event.kind === 'hover') {
+      ui.activeFrameId = event.frameId;
       ui.targetName.textContent = event.summary?.label || 'Hovered element';
       renderHeaderFrameBadge({ ...event.frame, frameId: event.frameId });
       setUIStatus(ui.countdownTimer !== null
@@ -1901,6 +1918,7 @@
       }
       ui.pendingHistoryIndex = null;
       ui.result = event.result;
+      ui.activeFrameId = event.frameId;
       ui.selectedFrameId = event.frameId;
       ui.currentSelectionId = event.selectionId || null;
       ui.ancestorExport = null;
@@ -3324,7 +3342,16 @@
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === MESSAGE.QUERY_STATE) {
-      sendResponse({ ok: true, active: frameState.active });
+      sendResponse({
+        ok: true,
+        active: frameState.active,
+        activeFrameId: frameState.isTopFrame && Number.isInteger(ui.activeFrameId)
+          ? ui.activeFrameId
+          : null,
+        selectedFrameId: frameState.isTopFrame && Number.isInteger(ui.selectedFrameId)
+          ? ui.selectedFrameId
+          : null
+      });
       return false;
     }
     if (message?.type === MESSAGE.SET_ACTIVE) {

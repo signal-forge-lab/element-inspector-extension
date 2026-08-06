@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.14.1`
+`0.14.2`
 
 ## 起動
 
@@ -27,6 +27,8 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 4. 対象ページでツールバーのPrismoraアイコンを押します。
 
 同じアイコンをもう一度押すか、専用ウィンドウの閉じるボタンまたは`Esc`で終了します。
+
+Manifest V3のService Workerが停止・再起動した場合も、次の操作時にトップフレームから現在のactive状態と選択フレームを回収してセッションを継続します。この復元にStorageは使用しません。
 
 ## 操作
 

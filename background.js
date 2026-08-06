@@ -12,6 +12,7 @@
   });
 
   const tabStates = new Map();
+  const tabStateRecoveries = new Map();
 
   function consumeLastError() {
     return chrome.runtime.lastError?.message || null;
@@ -26,6 +27,42 @@
       });
     }
     return tabStates.get(tabId);
+  }
+
+  function recoverTabState(tabId, callback) {
+    if (tabStates.has(tabId)) {
+      callback(tabStates.get(tabId), null);
+      return;
+    }
+
+    const pendingCallbacks = tabStateRecoveries.get(tabId);
+    if (pendingCallbacks) {
+      pendingCallbacks.push(callback);
+      return;
+    }
+
+    tabStateRecoveries.set(tabId, [callback]);
+    sendToFrame(tabId, 0, { type: MESSAGE.QUERY_STATE }, (response, error) => {
+      const callbacks = tabStateRecoveries.get(tabId) || [];
+      tabStateRecoveries.delete(tabId);
+      if (!callbacks.length) return;
+
+      const recoveryError = error || (!response?.ok ? response?.error || 'top frame state unavailable' : null);
+      if (recoveryError) {
+        for (const pendingCallback of callbacks) pendingCallback(null, recoveryError);
+        return;
+      }
+
+      const state = getTabState(tabId);
+      state.active = Boolean(response.active);
+      state.activeFrameId = state.active && Number.isInteger(response.activeFrameId)
+        ? response.activeFrameId
+        : null;
+      state.selectedFrameId = state.active && Number.isInteger(response.selectedFrameId)
+        ? response.selectedFrameId
+        : null;
+      for (const pendingCallback of callbacks) pendingCallback(state, null);
+    });
   }
 
   function sendToFrame(tabId, frameId, message, callback = null) {
@@ -63,21 +100,23 @@
     });
   });
 
-  chrome.tabs.onRemoved.addListener(tabId => tabStates.delete(tabId));
+  chrome.tabs.onRemoved.addListener(tabId => {
+    tabStates.delete(tabId);
+    tabStateRecoveries.delete(tabId);
+  });
 
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  function handleRuntimeMessage(message, sender, sendResponse, options = {}) {
     const tabId = sender.tab?.id;
     const frameId = Number.isInteger(sender.frameId) ? sender.frameId : 0;
     if (!Number.isInteger(tabId)) return undefined;
 
     if (message?.type === MESSAGE.FRAME_READY) {
       if (!tabStates.has(tabId) && frameId !== 0) {
-        sendToFrame(tabId, 0, { type: MESSAGE.QUERY_STATE }, response => {
-          const recoveredState = getTabState(tabId);
-          recoveredState.active = Boolean(response?.active);
+        recoverTabState(tabId, (recoveredState, error) => {
           sendResponse({
-            ok: true,
-            active: recoveredState.active,
+            ok: !error,
+            error: error || undefined,
+            active: Boolean(recoveredState?.active),
             frameId,
             isTopFrame: false
           });
@@ -92,6 +131,20 @@
         isTopFrame: frameId === 0
       });
       return false;
+    }
+
+    const requiresStateRecovery =
+      message?.type === MESSAGE.FRAME_EVENT ||
+      (message?.type === MESSAGE.TOP_COMMAND && frameId === 0);
+    if (!options.skipRecovery && requiresStateRecovery && !tabStates.has(tabId)) {
+      recoverTabState(tabId, (_recoveredState, error) => {
+        if (error) {
+          sendResponse({ ok: false, error });
+          return;
+        }
+        handleRuntimeMessage(message, sender, sendResponse, { skipRecovery: true });
+      });
+      return true;
     }
 
     const state = getTabState(tabId);
@@ -280,5 +333,7 @@
     }
 
     return undefined;
-  });
+  }
+
+  chrome.runtime.onMessage.addListener(handleRuntimeMessage);
 })();

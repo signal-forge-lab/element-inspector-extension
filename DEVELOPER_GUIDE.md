@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.1`
+`0.14.2`
 
 ## 構成
 
@@ -20,6 +20,7 @@ element_inspector_extension/
 ├─ .agents/skills/apple-design/SKILL.md
 ├─ assets/icons/main-icon.png
 ├─ assets/icons/main-icon-{16,32,48,128}.png
+├─ tests/background.test.js
 └─ tests/inspector.test.js
 ```
 
@@ -96,7 +97,9 @@ ELEMENT_INSPECTOR_TOP_COMMAND
 - `activeFrameId`: 最後にホバー情報を送ったフレーム
 - `selectedFrameId`: 固定中の要素を所有するフレーム
 
-Service Worker再起動後でも、ツールバークリック時にトップフレームへ現在状態を問い合わせてから反転します。新しい子フレームが接続した場合も、トップフレーム状態から復元します。
+Service Worker再起動後でも、ツールバークリック時にトップフレームへ現在状態を問い合わせてから反転します。さらに、再起動後の最初の`FRAME_EVENT`、`TOP_COMMAND`、子フレームの`FRAME_READY`でもトップフレームへ`QUERY_STATE`を送り、`active`、`activeFrameId`、`selectedFrameId`を復元してから元のメッセージを一度だけ処理します。
+
+同じタブで復元要求が重なった場合は1回の問い合わせへ集約します。復元に失敗した`TOP_COMMAND`は`ok: false`を返し、トップフレームUIが保留状態を解除してエラーを表示します。永続Storageは使用しません。
 
 ## `content.js`
 
@@ -482,7 +485,7 @@ npm test
 - Locator一意性
 - 兄弟・子要素ナビゲーションmetadata
 - Manifestの全フレーム設定
-- Background routing契約
+- Background routing契約とService Worker再起動後の状態復元
 - iframe context handshake
 - 新UIのタブ・ドラッグ・Reduced Motion
 - 固定Hierarchy、履歴一覧、SVG閉じるアイコン
@@ -526,6 +529,12 @@ npm test
 - nested
 - about:blank
 - iframe削除後
+
+### Lifecycle
+
+- fixed状態のままService Workerを停止・再起動し、次のhover / navigation / Edit / Ancestor detailが継続すること
+- countdown中のhover後にService Workerを再起動し、0秒時点で同じactive frameを固定できること
+- 復元不能時にAncestor detailのpending表示が解除され、UIへエラーが表示されること
 
 ### UI
 
