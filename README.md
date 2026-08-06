@@ -19,6 +19,10 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 `0.14.8`
 
+- [変更履歴](CHANGELOG.md)
+- [プライバシーポリシー](PRIVACY.md)
+- [第三者ライセンス表記](THIRD_PARTY_NOTICES.md)
+
 ## 起動
 
 1. Chromeで`chrome://extensions`を開きます。

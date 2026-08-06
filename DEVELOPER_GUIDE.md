@@ -14,6 +14,8 @@ element_inspector_extension/
 ├─ content.js
 ├─ package.json
 ├─ README.md
+├─ CHANGELOG.md
+├─ PRIVACY.md
 ├─ DEVELOPER_GUIDE.md
 ├─ THIRD_PARTY_NOTICES.md
 ├─ skills-lock.json
