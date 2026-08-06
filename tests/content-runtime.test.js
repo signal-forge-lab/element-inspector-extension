@@ -40,6 +40,11 @@ function createContentHarness(options = {}) {
       handleTopEvent,
       beginPicking,
       toggleCountdown,
+      setActiveTab,
+      renderPinnedComparisons,
+      handleTabKeyDown: typeof handleTabKeyDown === 'function'
+        ? handleTabKeyDown
+        : null,
       onWindowPageHide: typeof onWindowPageHide === 'function'
         ? onWindowPageHide
         : null,
@@ -172,6 +177,33 @@ function createFrameElement(sourceWindow) {
   };
 }
 
+function createTabButton(tabName, options = {}) {
+  const attributes = new Map();
+  return {
+    dataset: { tab: tabName, active: options.active ? 'true' : 'false' },
+    hidden: Boolean(options.hidden),
+    disabled: Boolean(options.disabled),
+    tabIndex: options.active ? 0 : -1,
+    focused: false,
+    setAttribute(name, value) {
+      attributes.set(name, String(value));
+    },
+    getAttribute(name) {
+      return attributes.get(name) ?? null;
+    },
+    focus() {
+      this.focused = true;
+    }
+  };
+}
+
+function createTabPanel(panelName, hidden = true) {
+  return {
+    dataset: { panel: panelName },
+    hidden
+  };
+}
+
 test('keeps all-frame reset enabled when the current frame has no edits', () => {
   const harness = createContentHarness();
   harness.api.ui.editResetAllButton = { disabled: true };
@@ -187,6 +219,111 @@ test('keeps all-frame reset enabled when the current frame has no edits', () => 
   });
 
   assert.equal(harness.api.ui.editResetAllButton.disabled, false);
+});
+
+test('applies tab selection, panel visibility, and roving tabindex together', () => {
+  const harness = createContentHarness();
+  const overview = createTabButton('overview', { active: true });
+  const styles = createTabButton('styles');
+  const json = createTabButton('json');
+  const overviewPanel = createTabPanel('overview', false);
+  const stylesPanel = createTabPanel('styles');
+  const jsonPanel = createTabPanel('json');
+  harness.api.ui.tabButtons = [overview, styles, json];
+  harness.api.ui.tabPanels = [overviewPanel, stylesPanel, jsonPanel];
+
+  harness.api.setActiveTab('styles');
+
+  assert.equal(harness.api.ui.activeTab, 'styles');
+  assert.equal(overview.getAttribute('aria-selected'), 'false');
+  assert.equal(styles.getAttribute('aria-selected'), 'true');
+  assert.equal(json.getAttribute('aria-selected'), 'false');
+  assert.equal(overview.tabIndex, -1);
+  assert.equal(styles.tabIndex, 0);
+  assert.equal(json.tabIndex, -1);
+  assert.equal(overviewPanel.hidden, true);
+  assert.equal(stylesPanel.hidden, false);
+  assert.equal(jsonPanel.hidden, true);
+});
+
+test('moves tabs with arrows, Home, and End while skipping hidden tabs', () => {
+  const harness = createContentHarness();
+  assert.equal(typeof harness.api.handleTabKeyDown, 'function');
+  const overview = createTabButton('overview', { active: true });
+  const styles = createTabButton('styles');
+  const compare = createTabButton('compare', { hidden: true });
+  const json = createTabButton('json');
+  harness.api.ui.tabButtons = [overview, styles, compare, json];
+  harness.api.ui.tabPanels = [
+    createTabPanel('overview', false),
+    createTabPanel('styles'),
+    createTabPanel('compare'),
+    createTabPanel('json')
+  ];
+
+  const eventFor = (currentTarget, key) => ({
+    currentTarget,
+    key,
+    prevented: false,
+    preventDefault() { this.prevented = true; }
+  });
+
+  let event = eventFor(overview, 'ArrowLeft');
+  harness.api.handleTabKeyDown(event);
+  assert.equal(event.prevented, true);
+  assert.equal(harness.api.ui.activeTab, 'json');
+  assert.equal(json.focused, true);
+
+  event = eventFor(json, 'Home');
+  harness.api.handleTabKeyDown(event);
+  assert.equal(harness.api.ui.activeTab, 'overview');
+  assert.equal(overview.focused, true);
+
+  event = eventFor(overview, 'End');
+  harness.api.handleTabKeyDown(event);
+  assert.equal(harness.api.ui.activeTab, 'json');
+
+  event = eventFor(json, 'ArrowRight');
+  harness.api.handleTabKeyDown(event);
+  assert.equal(harness.api.ui.activeTab, 'overview');
+});
+
+test('falls back to Overview when Compare is unavailable', () => {
+  const harness = createContentHarness();
+  const overview = createTabButton('overview', { active: true });
+  const compare = createTabButton('compare', { hidden: true });
+  harness.api.ui.tabButtons = [overview, compare];
+  harness.api.ui.tabPanels = [createTabPanel('overview', false), createTabPanel('compare')];
+  harness.api.ui.pins = [];
+
+  harness.api.setActiveTab('compare', { focus: true });
+
+  assert.equal(harness.api.ui.activeTab, 'overview');
+  assert.equal(overview.focused, true);
+  assert.equal(compare.focused, false);
+});
+
+test('moves focus to Overview when the active Compare tab disappears', () => {
+  const harness = createContentHarness();
+  const overview = createTabButton('overview');
+  const compare = createTabButton('compare', { active: true });
+  harness.api.ui.tabButtons = [overview, compare];
+  harness.api.ui.tabPanels = [createTabPanel('overview'), createTabPanel('compare', false)];
+  harness.api.ui.compareTabButton = compare;
+  harness.api.ui.compareGrid = {
+    replaceChildren() {},
+    appendChild() {}
+  };
+  harness.api.ui.clearPinsButton = { disabled: false };
+  harness.api.ui.pinCount = { textContent: '' };
+  harness.api.ui.activeTab = 'compare';
+  harness.api.ui.pins = [];
+
+  harness.api.renderPinnedComparisons();
+
+  assert.equal(compare.hidden, true);
+  assert.equal(harness.api.ui.activeTab, 'overview');
+  assert.equal(overview.focused, true);
 });
 
 test('clears stale ancestor JSON when returning to picking mode', () => {

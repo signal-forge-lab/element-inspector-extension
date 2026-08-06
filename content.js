@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.4';
+  const EXTENSION_VERSION = '0.14.5';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -1484,7 +1484,7 @@
       empty.className = 'compare-empty';
       empty.textContent = 'ピン留めした要素がここに表示されます。';
       ui.compareGrid.appendChild(empty);
-      if (ui.activeTab === 'compare') setActiveTab('overview');
+      if (ui.activeTab === 'compare') setActiveTab('overview', { focus: true });
       return;
     }
 
@@ -1639,16 +1639,46 @@
     renderAccessibilityView(result);
   }
 
-  function setActiveTab(tabName) {
-    if (tabName === 'compare' && !ui.pins.length) tabName = 'overview';
-    ui.activeTab = tabName;
+  function availableTabButtons() {
+    return ui.tabButtons.filter(button => !button.hidden && !button.disabled);
+  }
+
+  function setActiveTab(tabName, options = {}) {
+    const availableButtons = availableTabButtons();
+    const requestedButton = availableButtons.find(button => button.dataset.tab === tabName);
+    const activeButton = requestedButton ||
+      availableButtons.find(button => button.dataset.tab === 'overview') ||
+      availableButtons[0] ||
+      null;
+    const resolvedTabName = activeButton?.dataset.tab || 'overview';
+    ui.activeTab = resolvedTabName;
     for (const button of ui.tabButtons) {
-      button.dataset.active = button.dataset.tab === tabName ? 'true' : 'false';
+      const active = button === activeButton;
+      button.dataset.active = active ? 'true' : 'false';
       button.setAttribute('aria-selected', button.dataset.active);
+      button.tabIndex = active ? 0 : -1;
     }
     for (const panel of ui.tabPanels) {
-      panel.hidden = panel.dataset.panel !== tabName;
+      panel.hidden = panel.dataset.panel !== resolvedTabName;
     }
+    if (options.focus) activeButton?.focus?.({ preventScroll: true });
+  }
+
+  function handleTabKeyDown(event) {
+    const supportedKeys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+    if (!supportedKeys.includes(event.key)) return;
+    const buttons = availableTabButtons();
+    const currentIndex = buttons.indexOf(event.currentTarget);
+    if (currentIndex < 0 || !buttons.length) return;
+
+    let targetIndex = currentIndex;
+    if (event.key === 'ArrowLeft') targetIndex = (currentIndex - 1 + buttons.length) % buttons.length;
+    if (event.key === 'ArrowRight') targetIndex = (currentIndex + 1) % buttons.length;
+    if (event.key === 'Home') targetIndex = 0;
+    if (event.key === 'End') targetIndex = buttons.length - 1;
+
+    event.preventDefault();
+    setActiveTab(buttons[targetIndex].dataset.tab, { focus: true });
   }
 
   function pushSelectionHistory(event) {
@@ -2856,18 +2886,18 @@
           </section>
         </div>
 
-        <nav class="tabs" role="tablist" aria-label="Inspector views">
-          <button type="button" role="tab" data-tab="overview" data-active="true">Overview</button>
-          <button type="button" role="tab" data-tab="styles" data-active="false">Styles</button>
-          <button type="button" role="tab" data-tab="edit" data-active="false">Edit</button>
-          <button type="button" role="tab" data-tab="a11y" data-active="false">A11y</button>
-          <button type="button" role="tab" data-tab="locators" data-active="false">Locators</button>
-          <button type="button" role="tab" data-tab="compare" data-active="false" hidden>Compare</button>
-          <button type="button" role="tab" data-tab="json" data-active="false">JSON</button>
+        <nav class="tabs" role="tablist" aria-label="Inspector views" aria-orientation="horizontal">
+          <button type="button" role="tab" id="ei-tab-overview" aria-controls="ei-panel-overview" aria-selected="true" tabindex="0" data-tab="overview" data-active="true">Overview</button>
+          <button type="button" role="tab" id="ei-tab-styles" aria-controls="ei-panel-styles" aria-selected="false" tabindex="-1" data-tab="styles" data-active="false">Styles</button>
+          <button type="button" role="tab" id="ei-tab-edit" aria-controls="ei-panel-edit" aria-selected="false" tabindex="-1" data-tab="edit" data-active="false">Edit</button>
+          <button type="button" role="tab" id="ei-tab-a11y" aria-controls="ei-panel-a11y" aria-selected="false" tabindex="-1" data-tab="a11y" data-active="false">A11y</button>
+          <button type="button" role="tab" id="ei-tab-locators" aria-controls="ei-panel-locators" aria-selected="false" tabindex="-1" data-tab="locators" data-active="false">Locators</button>
+          <button type="button" role="tab" id="ei-tab-compare" aria-controls="ei-panel-compare" aria-selected="false" tabindex="-1" data-tab="compare" data-active="false" hidden>Compare</button>
+          <button type="button" role="tab" id="ei-tab-json" aria-controls="ei-panel-json" aria-selected="false" tabindex="-1" data-tab="json" data-active="false">JSON</button>
         </nav>
 
         <div class="view-scroll">
-          <div class="tab-panel" data-panel="overview">
+          <div class="tab-panel" role="tabpanel" id="ei-panel-overview" aria-labelledby="ei-tab-overview" data-panel="overview">
             <div class="overview-grid">
               <section class="overview-section">
                 <h2 class="overview-section-title">Element details</h2>
@@ -2898,7 +2928,7 @@
             </div>
           </div>
 
-          <div class="tab-panel" data-panel="styles" hidden>
+          <div class="tab-panel" role="tabpanel" id="ei-panel-styles" aria-labelledby="ei-tab-styles" data-panel="styles" hidden>
             <div class="styles-toolbar">
               <input class="styles-search" type="search" data-style-search placeholder="Search properties and values…" aria-label="Stylesを検索">
               <span class="styles-summary">要素を固定してください</span>
@@ -2947,7 +2977,7 @@
             </div>
           </div>
 
-          <div class="tab-panel" data-panel="edit" hidden>
+          <div class="tab-panel" role="tabpanel" id="ei-panel-edit" aria-labelledby="ei-tab-edit" data-panel="edit" hidden>
             <div class="edit-grid">
               <section class="edit-section">
                 <h2 class="edit-section-title">Temporary CSS editor</h2>
@@ -2986,7 +3016,7 @@
             </div>
           </div>
 
-          <div class="tab-panel" data-panel="a11y" hidden>
+          <div class="tab-panel" role="tabpanel" id="ei-panel-a11y" aria-labelledby="ei-tab-a11y" data-panel="a11y" hidden>
             <div class="audit-grid">
               <section class="audit-section">
                 <h2 class="audit-section-title">Semantics</h2>
@@ -3039,7 +3069,7 @@
             </div>
           </div>
 
-          <div class="tab-panel" data-panel="locators" hidden>
+          <div class="tab-panel" role="tabpanel" id="ei-panel-locators" aria-labelledby="ei-tab-locators" data-panel="locators" hidden>
             <section class="locator-card" data-locator="css">
               <div class="locator-head"><span class="locator-name">CSS Selector</span><span class="locator-badge">UNAVAILABLE</span></div>
               <div class="locator-body"><pre class="code-box">生成できません</pre><button type="button" data-copy="css">Copy</button></div>
@@ -3054,7 +3084,7 @@
             </section>
           </div>
 
-          <div class="tab-panel" data-panel="compare" hidden>
+          <div class="tab-panel" role="tabpanel" id="ei-panel-compare" aria-labelledby="ei-tab-compare" data-panel="compare" hidden>
             <section>
               <div class="compare-toolbar">
                 <span class="compare-note">最大4件を同時比較</span>
@@ -3064,7 +3094,7 @@
             </section>
           </div>
 
-          <div class="tab-panel" data-panel="json" hidden>
+          <div class="tab-panel" role="tabpanel" id="ei-panel-json" aria-labelledby="ei-tab-json" data-panel="json" hidden>
             <section>
               <div class="json-profile-card">
                 <div class="json-profile-head">
@@ -3230,6 +3260,7 @@
     ui.jsonSaveButton.addEventListener('click', downloadJson);
     for (const button of ui.tabButtons) {
       button.addEventListener('click', () => setActiveTab(button.dataset.tab));
+      button.addEventListener('keydown', handleTabKeyDown);
     }
     for (const button of panel.querySelectorAll('[data-nav]')) {
       button.addEventListener('click', () => sendTopCommand('NAVIGATE', { direction: button.dataset.nav }));

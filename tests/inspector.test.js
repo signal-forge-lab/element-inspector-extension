@@ -635,10 +635,10 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.14.4');
+  assert.equal(manifest.version, '0.14.5');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.14.4');
+  assert.equal(pkg.version, '0.14.5');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -714,6 +714,13 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /data-tab="edit"/);
   assert.match(content, /data-tab="a11y"/);
   assert.match(content, /data-tab="compare"/);
+  assert.match(content, /role="tab" id="ei-tab-overview"[^>]*aria-controls="ei-panel-overview"[^>]*aria-selected="true"[^>]*tabindex="0"/);
+  assert.match(content, /role="tablist"[^>]*aria-orientation="horizontal"/);
+  assert.match(content, /role="tab" id="ei-tab-styles"[^>]*aria-controls="ei-panel-styles"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
+  assert.match(content, /role="tabpanel" id="ei-panel-overview"[^>]*aria-labelledby="ei-tab-overview"/);
+  assert.match(content, /role="tabpanel" id="ei-panel-json"[^>]*aria-labelledby="ei-tab-json"[^>]*hidden/);
+  assert.match(content, /function handleTabKeyDown/);
+  assert.match(content, /button\.addEventListener\('keydown', handleTabKeyDown\)/);
   assert.match(content, /MAX_PINNED_ENTRIES = 4/);
   assert.match(content, /function toggleCurrentPin/);
   assert.match(content, /function renderPinnedComparisons/);

@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.14.4`
+`0.14.5`
 
 ## 起動
 
@@ -58,6 +58,7 @@ Manifest V3のService Workerが停止・再起動した場合も、次の操作�
 - `A11y`で基本Accessibility情報と限定イベント情報を確認します。
 - `Locators`でCSS Selector、XPath、JS Pathを確認・コピーします。
 - `JSON`で全結果をコピーまたはファイル保存します。
+- タブへフォーカス中は左右矢印で前後、`Home`で先頭、`End`で末尾へ移動できます。非表示の`Compare`は移動対象から除外されます。
 - `prefers-reduced-motion`、`prefers-reduced-transparency`、`prefers-contrast`へ対応します。
 
 UIはプロジェクト内の`apple-design`スキルを設計基準として、即時フィードバック、1:1ドラッグ、視覚階層、抑制されたマテリアル表現を重視しています。`0.9.0`で採用したCalm Hybrid方針を維持し、明るいニュートラル面と濃いグラファイトのデータ表示面を組み合わせています。メインアイコンは256pxの透過PNG原画を正本とし、同じデザインをサイズ別PNGへ縮小しています。

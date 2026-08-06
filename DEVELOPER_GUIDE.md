@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.4`
+`0.14.5`
 
 ## 構成
 
@@ -125,6 +125,7 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 
 - Inspectorウィンドウ生成
 - Overview / Styles / Edit / A11y / Locators / Compare / JSONタブ
+- ARIA tab / tabpanel契約とロービングtabindex、左右矢印・Home・Endによるキーボード移動
 - 固定Hierarchy領域
 - 選択履歴の戻る・進む・直接選択
 - 最大4件のピン留め比較
@@ -293,6 +294,9 @@ Handler previewは最大320文字です。`addEventListener()`、フレームワ
 - 基本文字は`#20262D`、補助文字は`#68727E`、成功状態は`#4F8A68`
 - 固定操作領域はCurrent Target、独立したSelection History、Hierarchyの順に配置
 - Overview / Styles / Edit / A11y / Locators / Compare / JSONは結果表示専用の軽量タブへ分離
+- 各タブは`aria-controls`で対応tabpanelを参照し、tabpanelは`aria-labelledby`でタブを参照する
+- 選択中タブだけを`tabindex="0"`とし、左右矢印・Home・Endで非表示タブを除外して自動選択する
+- アクティブなCompareが消える場合はOverviewへフォーカスを戻す
 - タブは囲み型セグメントではなく下線型
 - フレーム情報と選択状態をヘッダへ集約
 - 閉じるアイコンはSVGをinline-flex中央配置
@@ -558,6 +562,7 @@ npm test
 - Compact / Comfortable切替
 - 360px付近と620px以上でのレイアウト変化
 - Compareの1列・2列表示
+- タブの左右矢印、Home、End、非表示Compareのスキップ、Compare消滅時のOverviewフォーカス復帰
 - 4件ピン留めと5件目の拒否
 - ピン対象削除後もスナップショットが残ること
 - Hierarchyが全タブで常時表示されること
