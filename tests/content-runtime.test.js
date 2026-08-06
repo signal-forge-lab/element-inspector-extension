@@ -43,6 +43,8 @@ function createContentHarness(options = {}) {
       setActiveTab,
       renderPinnedComparisons,
       inspectAndSelect,
+      clampPanelWidth,
+      clampPanelHeight,
       handleTabKeyDown: typeof handleTabKeyDown === 'function'
         ? handleTabKeyDown
         : null,
@@ -68,8 +70,8 @@ function createContentHarness(options = {}) {
   const window = {
     top: null,
     parent: options.isTopFrame === false ? parentWindow : null,
-    innerWidth: 1280,
-    innerHeight: 800,
+    innerWidth: options.innerWidth || 1280,
+    innerHeight: options.innerHeight || 800,
     addEventListener(type, listener) {
       if (type === 'message') messageListeners.push(listener);
     },
@@ -237,6 +239,16 @@ test('keeps all-frame reset enabled when the current frame has no edits', () => 
   });
 
   assert.equal(harness.api.ui.editResetAllButton.disabled, false);
+});
+
+test('keeps normal panel minimums while fitting extremely small viewports', () => {
+  const normal = createContentHarness({ innerWidth: 1280, innerHeight: 800 });
+  assert.equal(normal.api.clampPanelWidth(200), 360);
+  assert.equal(normal.api.clampPanelHeight(200, 8), 440);
+
+  const small = createContentHarness({ innerWidth: 180, innerHeight: 160 });
+  assert.equal(small.api.clampPanelWidth(468), 164);
+  assert.equal(small.api.clampPanelHeight(440, 8), 144);
 });
 
 test('returns to picking without partial selection state when inspection throws', () => {

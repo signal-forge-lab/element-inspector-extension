@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.7';
+  const EXTENSION_VERSION = '0.14.8';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -2127,13 +2127,13 @@
   }
 
   function clampPanelWidth(width, maximumWidth = window.innerWidth - 16) {
-    const available = Math.max(240, Math.min(window.innerWidth - 16, maximumWidth));
+    const available = Math.max(1, Math.min(window.innerWidth - 16, maximumWidth));
     const minimum = Math.min(MIN_PANEL_WIDTH, available);
     return Math.min(available, Math.max(minimum, width));
   }
 
   function clampPanelHeight(height, top) {
-    const available = Math.max(220, window.innerHeight - Math.max(8, top) - 8);
+    const available = Math.max(1, window.innerHeight - Math.max(8, top) - 8);
     const minimum = Math.min(MIN_PANEL_HEIGHT, available);
     return Math.min(available, Math.max(minimum, height));
   }
