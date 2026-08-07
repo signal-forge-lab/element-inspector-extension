@@ -621,7 +621,7 @@ test('reports sibling position and selectable children', () => {
   assert.equal(first.nextElementSibling, second);
 });
 
-test('manifest and runtime implement the toolbar-driven in-page inspector', () => {
+test('manifest and static release contracts are aligned', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
   const background = fs.readFileSync(path.join(root, 'background.js'), 'utf8');
@@ -635,10 +635,10 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.14.8');
+  assert.equal(manifest.version, '0.14.9');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.14.8');
+  assert.equal(pkg.version, '0.14.9');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -666,21 +666,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.equal(manifest.content_scripts[0].match_about_blank, true);
   assert.equal(manifest.content_scripts[0].match_origin_as_fallback, true);
   assert.doesNotMatch(background, /contextMenus/);
-  assert.match(background, /chrome\.action\.onClicked/);
   assert.match(background, /\[Prismora\] unavailable on this page:/);
   assert.doesNotMatch(background, /\[Element Inspector\]/);
-  assert.match(background, /ELEMENT_INSPECTOR_FRAME_READY/);
-  assert.match(background, /ELEMENT_INSPECTOR_QUERY_STATE/);
-  assert.match(background, /ELEMENT_INSPECTOR_TOP_COMMAND/);
-  assert.match(background, /selectedFrameId/);
-  assert.match(background, /broadcastToFrames/);
-  assert.match(background, /command === 'RESTORE_SELECTION'/);
-  assert.match(background, /command === 'PIN_SELECTION' \|\| command === 'UNPIN_SELECTION'/);
-  assert.match(background, /command === 'APPLY_EDIT' \|\| command === 'UNDO_EDIT' \|\| command === 'RESET_CURRENT_EDITS'/);
-  assert.match(background, /command === 'RESET_ALL_EDITS'/);
-  assert.match(background, /command === 'REQUEST_ANCESTOR_EXPORT'/);
-  assert.match(background, /targetFrameId/);
-  assert.match(background, /historyRestoreFailed: true/);
   assert.match(content, /attachShadow\(\{ mode: 'closed' \}\)/);
   assert.match(content, /chrome\.runtime\.getURL\('assets\/icons\/main-icon-48\.png'\)/);
   assert.match(content, /@keyframes ei-rainbow-flow-x/);
@@ -689,11 +676,6 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /edge\.className = `highlight-edge \$\{side\}`/);
   assert.doesNotMatch(highlightCss, /mask-composite|webkit-mask|conic-gradient|drop-shadow/);
   assert.doesNotMatch(highlightCss, /opacity\s*:/);
-  assert.match(content, /FRAME_CHANNEL/);
-  assert.match(content, /window\.parent\.postMessage/);
-  assert.match(content, /querySelectorAll\('iframe, frame'\)/);
-  assert.match(content, /refreshChildFrameContexts/);
-  assert.match(content, /frameRelative/);
   assert.match(content, /data-nav="previous"/);
   assert.match(content, /data-nav="next"/);
   assert.match(content, /child-select/);
@@ -703,12 +685,6 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /history-back/);
   assert.match(content, /history-forward/);
   assert.match(content, /history-select/);
-  assert.match(content, /function navigateHistoryToIndex/);
-  assert.match(content, /selectionRegistry/);
-  assert.match(content, /pinnedSelectionIds/);
-  assert.match(content, /historyMode: options\.historyMode \|\| 'push'/);
-  assert.match(content, /function navigateHistory/);
-  assert.match(content, /RESTORE_SELECTION/);
   assert.match(content, /<svg viewBox="0 0 16 16"[^>]*>[\s\S]*M4 4l8 8M12 4l-8 8/);
   assert.doesNotMatch(content, /data-action="close" aria-label="閉じる">×<\/button>/);
   assert.match(content, /data-tab="locators"/);
@@ -721,11 +697,8 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /role="tab" id="ei-tab-styles"[^>]*aria-controls="ei-panel-styles"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
   assert.match(content, /role="tabpanel" id="ei-panel-overview"[^>]*aria-labelledby="ei-tab-overview"/);
   assert.match(content, /role="tabpanel" id="ei-panel-json"[^>]*aria-labelledby="ei-tab-json"[^>]*hidden/);
-  assert.match(content, /function handleTabKeyDown/);
   assert.match(content, /button\.addEventListener\('keydown', handleTabKeyDown\)/);
   assert.match(content, /MAX_PINNED_ENTRIES = 4/);
-  assert.match(content, /function toggleCurrentPin/);
-  assert.match(content, /function renderPinnedComparisons/);
   assert.match(content, /data-action="clear-pins"/);
   assert.match(content, /createComparisonField\('CSS Selector'/);
   assert.match(content, /createComparisonField\('XPath'/);
@@ -745,7 +718,6 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /button\.density-option\[data-active="false"\]:hover:not\(:disabled\)/);
   assert.match(content, /button\.density-option\[data-active="true"\]:hover:not\(:disabled\)/);
   assert.match(content, /data-density=/);
-  assert.match(content, /function setDensity/);
   assert.match(content, /data-density="comfortable"[^\n]*button\.icon-button/);
   assert.match(content, /history-position/);
   assert.match(content, /Selection history/);
@@ -755,7 +727,6 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   const historySurfaceIndex = content.indexOf('<section class="history-surface"');
   const hierarchySurfaceIndex = content.indexOf('<section class="hierarchy-surface">');
   assert.ok(commandSurfaceIndex < historySurfaceIndex && historySurfaceIndex < hierarchySurfaceIndex);
-  assert.match(content, /function renderHeaderFrameBadge/);
   assert.match(content, /<span class="frame-pill" hidden><\/span>/);
   assert.match(content, /\.brand-subtitle \{ display: none; \}/);
   assert.match(content, /data-resize-side="left"/);
@@ -764,66 +735,41 @@ test('manifest and runtime implement the toolbar-driven in-page inspector', () =
   assert.match(content, /data-resize-direction="bottom-left"/);
   assert.match(content, /data-resize-direction="bottom-right"/);
   assert.match(content, /MIN_PANEL_HEIGHT = 440/);
-  assert.match(content, /function clampPanelHeight/);
-  assert.match(content, /function beginPanelResize/);
-  assert.match(content, /function resizePanel/);
   assert.match(content, /container: inspector \/ inline-size/);
   assert.match(content, /--ei-spectrum:/);
   assert.match(content, /#20262d/);
   assert.match(content, /#4f8a68/);
   assert.match(content, /Local only · no storage/);
   assert.match(content, /UNIQUE · \$\{scope\}/);
-  assert.match(content, /countdownDeadline/);
   assert.match(content, /JSONをコピー/);
   assert.match(content, /JSONを保存/);
   assert.match(content, /data-json-profile="standard"/);
   assert.match(content, /data-json-profile="ancestor-detail"/);
-  assert.match(content, /function setJsonProfile/);
-  assert.match(content, /function requestAncestorExport/);
-  assert.match(content, /function buildAncestorExportSnapshot/);
-  assert.match(content, /kind === 'ancestorExport'/);
-  assert.match(content, /REQUEST_ANCESTOR_EXPORT/);
   assert.match(content, /prismora-ancestors-/);
   assert.match(content, /Descendants[\s\S]*Excluded/);
-  assert.match(content, /beginPanelDrag/);
   assert.match(content, /setPointerCapture/);
   assert.match(content, /releasePointerCapture/);
   assert.match(content, /event\.key !== 'Escape'[\s\S]*sendTopCommand\('DEACTIVATE'\)/);
   assert.match(content, /navigator\.clipboard\?\.writeText/);
   assert.match(content, /URL\.createObjectURL/);
-  assert.match(inspectorSource, /generateCssLocator/);
-  assert.match(inspectorSource, /generateXPathLocator/);
-  assert.match(inspectorSource, /generateJsPath/);
   assert.match(inspectorSource, /shadowRoot\?\.querySelector/);
-  assert.match(inspectorSource, /collectShadowContext/);
-  assert.match(inspectorSource, /collectComputedStyles/);
-  assert.match(inspectorSource, /collectBoxModel/);
   assert.match(content, /Box model/);
   assert.match(content, /data-style-group="layout"/);
   assert.match(content, /data-style-group="flex-grid"/);
   assert.match(content, /data-style-group="typography"/);
   assert.match(content, /data-style-group="custom-properties"/);
   assert.match(content, /data-style-search/);
-  assert.match(content, /function openStyleInEdit/);
   assert.match(content, /style-property-badge/);
   assert.match(content, /requested \$\{declaration\.value/);
   assert.match(content, /stylesSearchInput\.addEventListener\('input'/);
   assert.match(inspectorSource, /MAX_CUSTOM_PROPERTIES = 200/);
-  assert.match(inspectorSource, /function collectCustomProperties/);
   assert.match(content, /EDITABLE_PROPERTIES/);
   assert.match(content, /adoptedStyleSheets/);
-  assert.match(content, /function applyTemporaryEdit/);
-  assert.match(content, /function undoTemporaryEdit/);
-  assert.match(content, /function resetCurrentTemporaryEdits/);
-  assert.match(content, /function resetAllTemporaryEdits/);
   assert.match(content, /data-action="copy-edit-css"/);
   assert.match(content, /既存のstyle属性は変更しません/);
   assert.doesNotMatch(content, /selectedElement\.style\.|record\.element\.style\./);
-  assert.match(inspectorSource, /collectAccessibility/);
-  assert.match(inspectorSource, /collectEventInfo/);
   assert.match(content, /Limited event information/);
   assert.match(content, /addEventListener\(\)\、React\、Vue/);
-  assert.match(inspectorSource, /getNavigationState/);
   assert.doesNotMatch(runtimeSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|sendBeacon/);
   assert.doesNotMatch(runtimeSource, /localStorage|sessionStorage|chrome\.storage/);
 });

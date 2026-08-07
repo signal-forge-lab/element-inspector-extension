@@ -2,6 +2,16 @@
 
 Prismoraの主な変更を記録します。
 
+## [0.14.9] - 2026-08-07
+
+### Fixed
+
+- toolbar操作とService Worker状態復元を同じ復元キューへ統合し、deactivate直後にBackgroundだけ再active化する競合を解消しました。
+- fixed状態の再解析失敗を既存のselection invalidation経路へ統合し、Backgroundとtop UIに古い選択・JSONが残らないようにしました。
+- frame contextからCSS Selectorと親frame属性値を除外し、受信したCSS文字列も保持しないようにしました。
+- iframe置換後の次の`HELLO`で、消滅したWindow参照を`childFrameRequests`から削除するようにしました。
+- frame pruneの回帰テストをhelper直接呼び出しから実際の`HELLO`経路へ変更しました。
+
 ## [0.14.8] - 2026-08-07
 
 ### Fixed

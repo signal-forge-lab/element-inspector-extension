@@ -134,12 +134,12 @@
 
   chrome.action.onClicked.addListener(tab => {
     if (!Number.isInteger(tab?.id)) return;
-    sendToFrame(tab.id, 0, { type: MESSAGE.QUERY_STATE }, (response, error) => {
+    recoverTabState(tab.id, (state, error) => {
       if (error) {
         console.warn('[Prismora] unavailable on this page:', error);
         return;
       }
-      setTabActive(tab.id, !Boolean(response?.active));
+      setTabActive(tab.id, !Boolean(state?.active));
     });
   });
 

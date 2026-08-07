@@ -80,6 +80,8 @@ Prismoraが宣言する拡張機能権限は`clipboardWrite`です。これは�
 
 Content Scriptは`<all_urls>`および`all_frames`へ設定されています。これは、ユーザーがツールバーからPrismoraを起動したページとiframe内の要素を選択・解析するためです。Prismoraが非アクティブな間は、要素選択・解析・frame context handshakeを実行しません。
 
+iframe経路を構築する`postMessage` handshakeはページスクリプトから観測可能です。そのため、handshakeで渡すContextは相関用token、階層深度、`iframe` / `frame`のタグ種別だけに限定し、CSS Selector、URL、`name`、`title`、`src`、`aria-label`などの親frame属性値は渡しません。tokenは認証情報として使用しません。
+
 ## 8. 第三者提供
 
 Prismoraはユーザーデータを販売、貸与、広告目的で利用、または第三者へ提供しません。

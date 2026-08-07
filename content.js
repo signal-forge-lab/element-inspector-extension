@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.8';
+  const EXTENSION_VERSION = '0.14.9';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -9,7 +9,6 @@
   const MAX_PINNED_ENTRIES = 4;
   const MAX_FRAME_CONTEXT_DEPTH = 16;
   const MAX_FRAME_CONTEXT_TOKEN_LENGTH = 128;
-  const MAX_FRAME_SELECTOR_LENGTH = 2048;
   const MIN_PANEL_WIDTH = 360;
   const MIN_PANEL_HEIGHT = 440;
   const DEFAULT_PANEL_WIDTH = 468;
@@ -264,13 +263,9 @@
   }
 
   function buildFramePathItem(frameElement) {
-    const css = globalThis.ElementInspector?.generateCssLocator?.(frameElement);
-    const selector = typeof css?.value === 'string' && css.value.length <= MAX_FRAME_SELECTOR_LENGTH
-      ? css.value
-      : null;
     return {
       tagName: frameElement.localName || 'iframe',
-      css: selector
+      css: null
     };
   }
 
@@ -282,12 +277,9 @@
     if (!item || typeof item !== 'object') return null;
     const tagName = item.tagName === 'frame' ? 'frame' : item.tagName === 'iframe' ? 'iframe' : null;
     if (!tagName) return null;
-    if (item.css !== null && item.css !== undefined) {
-      if (typeof item.css !== 'string' || item.css.length > MAX_FRAME_SELECTOR_LENGTH) return null;
-    }
     return {
       tagName,
-      css: typeof item.css === 'string' ? item.css : null
+      css: null
     };
   }
 
@@ -335,6 +327,12 @@
     }
   }
 
+  function pruneChildFrameRequests() {
+    for (const sourceWindow of frameState.childFrameRequests.keys()) {
+      if (!findFrameElement(sourceWindow)) frameState.childFrameRequests.delete(sourceWindow);
+    }
+  }
+
   function onFrameContextMessage(event) {
     const data = event.data;
     if (!frameState.active || !data || typeof data !== 'object' || data.channel !== FRAME_CHANNEL) return;
@@ -349,6 +347,7 @@
     }
 
     if (data.type === 'HELLO' && isValidFrameContextToken(data.token) && event.source) {
+      pruneChildFrameRequests();
       if (!findFrameElement(event.source)) return;
       frameState.childFrameRequests.set(event.source, data.token);
       if (!respondWithFrameContext(event.source, data.token)) {
@@ -871,12 +870,15 @@
       };
       result.temporaryEdits = buildTemporaryEditSnapshot(element);
     } catch (error) {
-      startFramePicking('picking');
-      emitFrameEvent({
-        kind: 'status',
-        status: 'error',
-        message: `要素の解析に失敗しました: ${error instanceof Error ? error.message : String(error)}`
-      });
+      const message = `要素の解析に失敗しました: ${error instanceof Error ? error.message : String(error)}`;
+      if (!invalidateCurrentSelection(message)) {
+        startFramePicking('picking');
+        emitFrameEvent({
+          kind: 'status',
+          status: 'error',
+          message
+        });
+      }
       return;
     }
 

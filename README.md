@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.14.8`
+`0.14.9`
 
 - [変更履歴](CHANGELOG.md)
 - [プライバシーポリシー](PRIVACY.md)
@@ -292,7 +292,7 @@ Accessibility / 限定イベント解析
 
 iframe間の選択結果はBackground Service Workerを介してトップフレームへ集約します。nested iframeの経路は、親子フレーム間の`postMessage`ハンドシェイクで構築します。
 
-frame context handshakeはInspectorがactiveの間だけ動作します。子frameはactive化時に`HELLO`を送り、親frameもactive化時に直接の子frameへ`REQUEST_HELLO`を送るため、active化の順序に依存せずポーリングなしで経路を構築します。親が返す経路情報は各iframeの`tagName`と相対CSS Selectorだけに限定し、`name`、`title`、`src`は転送しません。tokenは認証情報ではなく相関IDとして扱い、直接の子frame照合、型、長さ、最大深度16の検証後に診断情報として使用します。
+frame context handshakeはInspectorがactiveの間だけ動作します。子frameはactive化時に`HELLO`を送り、親frameもactive化時に直接の子frameへ`REQUEST_HELLO`を送るため、active化の順序に依存せずポーリングなしで経路を構築します。親が返す経路情報は各iframeの`tagName`と階層深度だけに限定し、CSS Selector、`name`、`title`、`src`、`aria-label`などの属性値は転送しません。tokenは認証情報ではなく相関IDとして扱い、直接の子frame照合、型、長さ、最大深度16の検証後に診断情報として使用します。
 
 固定した要素が削除された場合、または選択中のiframeが削除・再読み込み・移動した場合は、Backgroundが選択状態を無効化して全フレームを選択モードへ戻します。古いframeや古い選択IDから遅れて届いた通知は採用しません。
 
@@ -305,7 +305,7 @@ JSONタブの`Export profile`で次を切り替えます。
 
 `Ancestor detail`は選択中のフレームへオンデマンド要求し、通常の選択結果へ常時混載しません。選択要素と各先祖には属性、テキスト、座標、shallow HTML、Locator、Computed Styles、CSS Custom Properties、Box Model、Accessibility、限定イベント、Shadow情報、Frame情報、一時編集情報を含めます。
 
-直下の子は従来どおり最大80件の概要だけを含み、孫以下は取得しません。`shallowOuterHTML`も開始タグ相当だけを保持し、配下DOMは展開しません。
+直下の子は従来どおり最大80件の概要だけを含み、孫以下のDOM構造は取得しません。`shallowOuterHTML`も開始タグ相当だけを保持し、配下DOMは展開しません。なお、選択要素と各先祖の`text`はDOM構造とは別に`textContent`由来のため、配下要素の文字列を含む場合がありますが、空白正規化後の最大5,000文字に制限します。
 
 主要項目：
 
@@ -375,7 +375,7 @@ JSONタブの`Export profile`で次を切り替えます。
 - `Ancestor detail`の選択要素と各先祖も`text`を最大5,000文字とし、同じ詳細内の`textMeta`へ記録
 - `ancestors`は最大8階層
 - 子要素一覧は最大80件
-- `Ancestor detail`の直下の子は概要のみ、孫以下は除外
+- `Ancestor detail`の直下の子は概要のみ、孫以下のDOM構造は除外。選択要素・先祖の`text`には子孫由来テキストが最大5,000文字まで含まれる場合あり
 - 座標は各Documentのビューポート基準
 
 ## 権限とプライバシー

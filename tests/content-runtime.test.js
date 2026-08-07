@@ -36,7 +36,6 @@ function createContentHarness(options = {}) {
       requestChildFrameContexts: typeof requestChildFrameContexts === 'function'
         ? requestChildFrameContexts
         : null,
-      refreshChildFrameContexts,
       handleTopEvent,
       beginPicking,
       toggleCountdown,
@@ -61,6 +60,7 @@ function createContentHarness(options = {}) {
   const parentMessages = [];
   const messageListeners = [];
   let frameElements = [];
+  let frameLocatorCalls = 0;
 
   const parentWindow = {
     postMessage(message, targetOrigin) {
@@ -145,6 +145,7 @@ function createContentHarness(options = {}) {
     Blob,
     ElementInspector: {
       generateCssLocator() {
+        frameLocatorCalls += 1;
         return { value: options.frameSelector ?? null };
       },
       inspectElement() {
@@ -175,6 +176,9 @@ function createContentHarness(options = {}) {
     runtimeMessages,
     parentMessages,
     parentWindow,
+    frameLocatorCallCount() {
+      return frameLocatorCalls;
+    },
     setFrameElements(elements) {
       frameElements = elements;
     }
@@ -279,6 +283,38 @@ test('returns to picking without partial selection state when inspection throws'
   assert.ok(status);
   assert.equal(status.event.status, 'error');
   assert.match(status.event.message, /analysis failed/);
+});
+
+test('invalidates an existing fixed selection when a refresh inspection throws', () => {
+  const harness = createContentHarness({ inspectError: 'refresh failed' });
+  const selected = new FakeElement({ connected: true });
+  Object.assign(harness.api.frameState, {
+    active: true,
+    mode: 'fixed',
+    hoveredElement: selected,
+    selectedElement: selected,
+    currentSelectionId: 'selection-old',
+    highlightedElement: selected
+  });
+  harness.api.frameState.selectionRegistry.set('selection-old', selected);
+  harness.api.frameState.pinnedSelectionIds.add('selection-old');
+
+  harness.api.inspectAndSelect(selected, '編集Reset', {
+    selectionId: 'selection-old',
+    historyMode: 'refresh'
+  });
+
+  const invalidation = harness.runtimeMessages.find(message =>
+    message.type === MESSAGE.FRAME_EVENT && message.event?.kind === 'selectionInvalidated'
+  );
+  assert.ok(invalidation);
+  assert.equal(invalidation.event.selectionId, 'selection-old');
+  assert.match(invalidation.event.message, /refresh failed/);
+  assert.equal(harness.api.frameState.mode, 'picking');
+  assert.equal(harness.api.frameState.selectedElement, null);
+  assert.equal(harness.api.frameState.currentSelectionId, null);
+  assert.equal(harness.api.frameState.selectionRegistry.has('selection-old'), false);
+  assert.equal(harness.api.frameState.pinnedSelectionIds.has('selection-old'), false);
 });
 
 test('removes temporary edit attributes from nested SVG snapshot fields', () => {
@@ -618,8 +654,8 @@ test('accepts only bounded string tokens from direct child frames', () => {
   assert.deepEqual(Object.keys(responses[0].context.path[0]).sort(), ['css', 'tagName']);
 });
 
-test('omits an oversized generated frame selector before posting context', () => {
-  const harness = createContentHarness({ frameSelector: '#'.padEnd(3000, 'x') });
+test('does not expose parent frame attribute values through the context selector', () => {
+  const harness = createContentHarness({ frameSelector: '[title="Private title"]' });
   const responses = [];
   const sourceWindow = {
     postMessage(message) { responses.push(message); }
@@ -634,22 +670,32 @@ test('omits an oversized generated frame selector before posting context', () =>
 
   assert.equal(responses.length, 1);
   assert.equal(responses[0].context.path[0].css, null);
+  assert.equal(harness.frameLocatorCallCount(), 0);
+  const serialized = JSON.stringify(responses[0]);
+  assert.doesNotMatch(serialized, /Private title|private-name|child\.example/);
 });
 
-test('prunes child frame requests after the iframe disappears', () => {
+test('prunes a removed child frame through the next production HELLO flow', () => {
   const harness = createContentHarness();
-  const sourceWindow = { postMessage() {} };
-  harness.setFrameElements([createFrameElement(sourceWindow)]);
+  const oldWindow = { postMessage() {} };
+  const newWindow = { postMessage() {} };
+  harness.setFrameElements([createFrameElement(oldWindow)]);
   harness.api.frameState.active = true;
   harness.api.onFrameContextMessage({
-    source: sourceWindow,
-    data: { channel: '__element_inspector_frame_context_v1__', type: 'HELLO', token: 'child-token' }
+    source: oldWindow,
+    data: { channel: '__element_inspector_frame_context_v1__', type: 'HELLO', token: 'old-token' }
   });
   assert.equal(harness.api.frameState.childFrameRequests.size, 1);
 
-  harness.setFrameElements([]);
-  harness.api.refreshChildFrameContexts();
-  assert.equal(harness.api.frameState.childFrameRequests.size, 0);
+  harness.setFrameElements([createFrameElement(newWindow)]);
+  harness.api.onFrameContextMessage({
+    source: newWindow,
+    data: { channel: '__element_inspector_frame_context_v1__', type: 'HELLO', token: 'new-token' }
+  });
+
+  assert.equal(harness.api.frameState.childFrameRequests.size, 1);
+  assert.equal(harness.api.frameState.childFrameRequests.has(oldWindow), false);
+  assert.equal(harness.api.frameState.childFrameRequests.get(newWindow), 'new-token');
 });
 
 test('rejects malformed parent context instead of storing untrusted metadata', () => {
@@ -695,7 +741,7 @@ test('stores only sanitized fields from a valid parent frame context', () => {
   assert.deepEqual(
     JSON.parse(JSON.stringify(harness.api.frameState.frameContext.path)),
     [
-      { tagName: 'iframe', css: '#outer' },
+      { tagName: 'iframe', css: null },
       { tagName: 'frame', css: null }
     ]
   );

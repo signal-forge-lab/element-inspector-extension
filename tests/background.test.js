@@ -7,6 +7,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const MESSAGE = Object.freeze({
+  SET_ACTIVE: 'ELEMENT_INSPECTOR_SET_ACTIVE',
   QUERY_STATE: 'ELEMENT_INSPECTOR_QUERY_STATE',
   FRAME_READY: 'ELEMENT_INSPECTOR_FRAME_READY',
   FRAME_EVENT: 'ELEMENT_INSPECTOR_FRAME_EVENT',
@@ -18,6 +19,7 @@ const MESSAGE = Object.freeze({
 function createBackgroundHarness(options = {}) {
   const source = fs.readFileSync(path.join(__dirname, '..', 'background.js'), 'utf8');
   const runtimeListeners = [];
+  const actionListeners = [];
   const sentMessages = [];
   const pendingStateQueries = [];
   const stateResponse = options.stateResponse || {
@@ -38,7 +40,11 @@ function createBackgroundHarness(options = {}) {
       }
     },
     action: {
-      onClicked: { addListener() {} }
+      onClicked: {
+        addListener(listener) {
+          actionListeners.push(listener);
+        }
+      }
     },
     tabs: {
       onRemoved: { addListener() {} },
@@ -70,9 +76,13 @@ function createBackgroundHarness(options = {}) {
 
   vm.runInNewContext(source, { chrome, console });
   assert.equal(runtimeListeners.length, 1);
+  assert.equal(actionListeners.length, 1);
 
   return {
     sentMessages,
+    clickAction(tabId = 41) {
+      actionListeners[0]({ id: tabId });
+    },
     dispatch(message, { tabId = 41, frameId = 0 } = {}) {
       const outcome = { returnValue: undefined, response: undefined };
       outcome.returnValue = runtimeListeners[0](
@@ -94,6 +104,30 @@ function createBackgroundHarness(options = {}) {
     }
   };
 }
+
+test('coalesces toolbar deactivate with in-flight service worker recovery', () => {
+  const harness = createBackgroundHarness({ deferStateQuery: true });
+
+  harness.clickAction();
+  const hover = harness.dispatch({
+    type: MESSAGE.FRAME_EVENT,
+    event: { kind: 'hover', summary: { label: '<button>' } }
+  }, { frameId: 7 });
+
+  assert.equal(hover.returnValue, true);
+  assert.equal(harness.stateQueryCount(), 1);
+
+  harness.flushStateQueries();
+
+  assert.ok(harness.sentMessages.some(item =>
+    item.frameId === null && item.message.type === MESSAGE.SET_ACTIVE && item.message.active === false
+  ));
+  assert.equal(harness.sentMessages.some(item =>
+    item.frameId === 0 && item.message.type === MESSAGE.TOP_EVENT && item.message.event?.kind === 'hover'
+  ), false);
+  assert.equal(hover.response?.ok, false);
+  assert.equal(hover.response?.ignored, true);
+});
 
 test('recovers an active session before processing the first frame event after service worker restart', () => {
   const harness = createBackgroundHarness();
@@ -146,6 +180,28 @@ test('recovers active and selected frame routing for countdown, navigation, edit
       item.message.command === routedCommand
     );
     assert.ok(routed, `${command} was not routed to the recovered target frame`);
+  }
+});
+
+test('routes history restore and pin commands to their explicit target frame', () => {
+  const cases = ['RESTORE_SELECTION', 'PIN_SELECTION', 'UNPIN_SELECTION'];
+  for (const command of cases) {
+    const harness = createBackgroundHarness();
+    const outcome = harness.dispatch({
+      type: MESSAGE.TOP_COMMAND,
+      command,
+      targetFrameId: 9,
+      selectionId: 'selection-9'
+    });
+
+    assert.equal(outcome.returnValue, true, command);
+    assert.equal(outcome.response?.ok, true, command);
+    assert.ok(harness.sentMessages.some(item =>
+      item.frameId === 9 &&
+      item.message.type === MESSAGE.FRAME_COMMAND &&
+      item.message.command === command &&
+      item.message.selectionId === 'selection-9'
+    ), `${command} was not routed to the explicit target frame`);
   }
 });
 

@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.8`
+`0.14.9`
 
 ## 構成
 
@@ -102,9 +102,9 @@ ELEMENT_INSPECTOR_TOP_COMMAND
 - `selectedFrameId`: 固定中の要素を所有するフレーム
 - `selectedSelectionId`: 固定中の選択ID。同一frameから遅れて届いた古い無効化通知を破棄するために使用
 
-Service Worker再起動後でも、ツールバークリック時にトップフレームへ現在状態を問い合わせてから反転します。さらに、再起動後の最初の`FRAME_EVENT`、`TOP_COMMAND`、子フレームの`FRAME_READY`でもトップフレームへ`QUERY_STATE`を送り、`active`、`activeFrameId`、`selectedFrameId`、`currentSelectionId`を復元してから元のメッセージを一度だけ処理します。
+Service Worker再起動後にBackground状態が未復元の場合、ツールバークリック、最初の`FRAME_EVENT`、`TOP_COMMAND`、子フレームの`FRAME_READY`は共通の`recoverTabState()`を通り、トップフレームへ`QUERY_STATE`を送って`active`、`activeFrameId`、`selectedFrameId`、`currentSelectionId`を復元します。すでにBackground状態がある場合はその状態を正本として使用します。
 
-同じタブで復元要求が重なった場合は1回の問い合わせへ集約します。復元に失敗した`TOP_COMMAND`は`ok: false`を返し、トップフレームUIが保留状態を解除してエラーを表示します。永続Storageは使用しません。
+同じタブでツールバー操作とメッセージ処理を含む復元要求が重なった場合は1回の問い合わせへ集約します。これにより、deactivate後に遅い復元応答だけがBackgroundを再active化する競合を防ぎます。復元に失敗した`TOP_COMMAND`は`ok: false`を返し、トップフレームUIが保留状態を解除してエラーを表示します。永続Storageは使用しません。
 
 トップフレームが`picking`または`countdown`へ移行する場合は、現在選択、選択フレーム、履歴移動の保留、Ancestor detail結果と生成中状態を`clearTopSelectionState()`で一括解除します。選択履歴とピン留めスナップショットは維持します。
 
@@ -146,9 +146,9 @@ Service Worker再起動後でも、ツールバークリック時にトップフ
 
 各子フレームはInspector active中だけ親へ`postMessage`で`HELLO`を送り、親Content Scriptが`event.source`と直接の`iframe.contentWindow`を照合します。親もactive化時に直接の子frameへ`REQUEST_HELLO`を送るため、親・子どちらが先にactive化しても、後からactiveになった側のイベントでhandshakeを成立させます。タイマーやポーリングは使用しません。
 
-親はiframe要素の`tagName`とCSS Selectorだけを既存の親経路へ追加して子へ返します。`name`、`title`、`src`は返しません。nested iframeで親経路の到着が遅れた場合は、登録済みの子フレームへ更新済みContextを再送します。
+親はiframe要素の`tagName`と階層深度だけを既存の親経路へ追加して子へ返します。CSS Selector、`name`、`title`、`src`、`aria-label`などの属性値は返しません。nested iframeで親経路の到着が遅れた場合は、登録済みの子フレームへ更新済みContextを再送します。
 
-この`postMessage`経路はページから観測可能であり、tokenは認証境界ではありません。tokenは最大128文字の相関IDとしてのみ扱い、contextは最大深度16、path長一致、`iframe` / `frame`、最大2,048文字のSelectorというshapeを検証します。消滅した子frameのWindow参照は再送時にMapから削除します。
+この`postMessage`経路はページから観測可能であり、tokenは認証境界ではありません。tokenは最大128文字の相関IDとしてのみ扱い、contextは最大深度16、path長一致、`iframe` / `frame`というshapeだけを保持します。受信したCSS文字列は保存せず`null`へ正規化します。消滅した子frameのWindow参照は、新しい`HELLO`受付時とContext再送時にMapから削除します。
 
 固定要素の切断、子frameの`pagehide`、選択frameの新しい`FRAME_READY`を`selectionInvalidated`へ統一します。Backgroundはframe IDとselection IDの両方が現在値と一致する場合だけ選択状態を解除し、全フレームへ`START_PICKING`をbroadcastします。トップframe再読み込み時も古い選択ルーティングを破棄します。
 
@@ -251,7 +251,7 @@ Styles UIはプロパティ名・値・一時編集値をクライアント側�
 
 `ElementInspector.buildAncestorExport()`は選択要素と親から最大8階層へ、同じ詳細構造のスナップショットを生成します。各詳細には属性、テキスト、座標、shallow HTML、Locator、Computed Styles、Box Model、Accessibility、限定イベント、Shadow情報を含めます。
 
-`inspectElement()`と`buildAncestorExport()`はDOMの`textContent`を空白正規化後に既定5,000文字へ制限します。既存の`selectedText`／`text`文字列を維持し、`truncated`、`originalLength`、`limit`をそれぞれ`selectedTextMeta`／`textMeta`へ追加します。Ancestor detailでは選択要素と各先祖の`textMeta`に同じ情報を保持します。
+`inspectElement()`と`buildAncestorExport()`はDOMの`textContent`を空白正規化後に既定5,000文字へ制限します。既存の`selectedText`／`text`文字列を維持し、`truncated`、`originalLength`、`limit`をそれぞれ`selectedTextMeta`／`textMeta`へ追加します。Ancestor detailでは選択要素と各先祖の`textMeta`に同じ情報を保持します。`textContent`は子孫テキストを含み得るため、「孫以下を除外」はDOM構造・子要素一覧・`shallowOuterHTML`の非再帰を指し、文字列内容まで子孫由来を除去する意味ではありません。
 
 トップフレームUIが`REQUEST_ANCESTOR_EXPORT`を選択中フレームへ送り、フレーム側でFrame情報と対象別の一時編集情報を追加して`ancestorExport`イベントとして返します。選択IDが変わった応答は採用しません。
 
@@ -504,8 +504,9 @@ npm test
 - Locator一意性
 - 兄弟・子要素ナビゲーションmetadata
 - Manifestの全フレーム設定
-- Background routing契約、Service Worker再起動後の状態復元、frame再読み込み時のselection invalidation
-- iframe context handshakeのactive制限、payload縮小、message検証、消滅frame参照のprune
+- Background routing契約、Service Worker再起動後の状態復元、toolbar deactivateとの復元競合、frame再読み込み時のselection invalidation
+- iframe context handshakeのactive制限、親frame属性値を含まないpayload、message検証、実際の`HELLO`経路での消滅frame参照prune
+- fixed状態の再解析失敗時にselection invalidationへ移行し、古い選択状態を残さないこと
 - 別frameに編集が残る場合の全Reset操作
 - 新UIのタブ・ドラッグ・Reduced Motion
 - 固定Hierarchy、履歴一覧、SVG閉じるアイコン
