@@ -2,6 +2,13 @@
 
 Prismoraの主な変更を記録します。
 
+## [0.15.0] - 2026-08-08
+
+### Changed
+
+- 表示密度を従来のCompact相当へ一本化し、`Compact / Comfortable`切替UIと専用state/CSSを削除しました。
+- パネル幅・高さのリサイズとCSS Container Queriesによるレスポンシブ表示は維持します。
+
 ## [0.14.9] - 2026-08-07
 
 ### Fixed

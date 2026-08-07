@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.14.9';
+  const EXTENSION_VERSION = '0.15.0';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -82,7 +82,6 @@
     pickButton: null,
     delayInput: null,
     delayButton: null,
-    densityButtons: [],
     backButton: null,
     historySelect: null,
     historyPosition: null,
@@ -171,7 +170,6 @@
     drag: null,
     resize: null,
     activeTab: 'overview',
-    density: 'compact',
     history: [],
     historyIndex: -1,
     pendingHistoryIndex: null,
@@ -1809,17 +1807,6 @@
     }
   }
 
-  function setDensity(density) {
-    ui.density = density === 'comfortable' ? 'comfortable' : 'compact';
-    if (!ui.panel) return;
-    ui.panel.dataset.density = ui.density;
-    for (const button of ui.densityButtons) {
-      const active = button.dataset.densityOption === ui.density;
-      button.dataset.active = active ? 'true' : 'false';
-      button.setAttribute('aria-pressed', String(active));
-    }
-  }
-
   function clearTopSelectionState() {
     ui.result = null;
     ui.activeFrameId = null;
@@ -2392,35 +2379,6 @@
       }
       button.icon-button svg { display: block; width: 14px; height: 14px; stroke: currentColor; }
       button.close-button { border-radius: 8px; color: #59636e; }
-      .density-control {
-        display: inline-flex;
-        align-items: center;
-        gap: 2px;
-        min-height: 29px;
-        border: 1px solid var(--ei-line);
-        border-radius: 9px;
-        padding: 2px;
-        background: rgba(32,38,45,.045);
-      }
-      button.density-option {
-        min-height: 23px;
-        border: 0;
-        border-radius: 6px;
-        padding: 0 7px;
-        background: transparent;
-        color: #69737e;
-        box-shadow: none;
-        font-size: 7.5px;
-        font-weight: 700;
-        letter-spacing: .045em;
-      }
-      button.density-option[data-active="false"]:hover:not(:disabled) { background: rgba(255,255,255,.7); border-color: transparent; }
-      button.density-option[data-active="true"] {
-        background: var(--ei-graphite);
-        color: #f7f8fa;
-        box-shadow: 0 1px 0 rgba(255,255,255,.12) inset;
-      }
-      button.density-option[data-active="true"]:hover:not(:disabled) { background: #303943; color: #f7f8fa; }
       button.pin-button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 72px; }
       button.pin-button[data-active="true"] { color: #4b6177; border-color: rgba(75,97,119,.34); background: rgba(223,230,237,.9); }
       .pin-count { display: inline-grid; place-items: center; min-width: 16px; height: 16px; border-radius: 999px; background: rgba(32,38,45,.08); color: #4b5560; font-size: 8px; }
@@ -2733,28 +2691,6 @@
         transition: opacity 120ms ease;
       }
       .resize-handle:hover::after, .resize-handle:active::after { opacity: .9; }
-      .panel[data-density="comfortable"] .titlebar { min-height: 64px; padding-block: 14px; }
-      .panel[data-density="comfortable"] .workspace { padding: 14px 18px 0; }
-      .panel[data-density="comfortable"] .command-surface { padding: 16px; }
-      .panel[data-density="comfortable"] .hierarchy-surface { padding: 15px 16px 16px; }
-      .panel[data-density="comfortable"] button, .panel[data-density="comfortable"] input, .panel[data-density="comfortable"] select { min-height: 38px; }
-      .panel[data-density="comfortable"] button.icon-button { width: 38px; min-width: 38px; height: 38px; min-height: 38px; }
-      .panel[data-density="comfortable"] .density-control { min-height: 31px; }
-      .panel[data-density="comfortable"] button.density-option { min-height: 25px; }
-      .panel[data-density="comfortable"] .history-surface { padding: 13px 16px 14px; }
-      .panel[data-density="comfortable"] .history-head { margin-bottom: 8px; }
-      .panel[data-density="comfortable"] .history-bar { grid-template-columns: 84px minmax(0,1fr) 84px; gap: 8px; }
-      .panel[data-density="comfortable"] button.history-button, .panel[data-density="comfortable"] .history-select { min-height: 40px; }
-      .panel[data-density="comfortable"] .command-row { gap: 10px; margin-top: 12px; }
-      .panel[data-density="comfortable"] .nav-grid { gap: 8px; }
-      .panel[data-density="comfortable"] .nav-grid button { min-height: 37px; }
-      .panel[data-density="comfortable"] .tabs { gap: 24px; margin-top: 14px; }
-      .panel[data-density="comfortable"] .tabs button { min-height: 42px; }
-      .panel[data-density="comfortable"] .view-scroll { padding-top: 16px; }
-      .panel[data-density="comfortable"] .overview-grid, .panel[data-density="comfortable"] .styles-grid, .panel[data-density="comfortable"] .audit-grid { gap: 12px; }
-      .panel[data-density="comfortable"] .overview-section, .panel[data-density="comfortable"] .compare-card { padding: 16px; }
-      .panel[data-density="comfortable"] .styles-section { padding: 16px; }
-      .panel[data-density="comfortable"] .edit-section, .panel[data-density="comfortable"] .audit-section { padding: 16px; }
       @container inspector (min-width: 440px) {
         .overview-grid { grid-template-columns: 1.12fr .9fr .98fr; }
       }
@@ -2773,8 +2709,6 @@
         .frame-pill { display: none; }
         .brand-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .brand-subtitle { display: none; }
-        .density-control { gap: 1px; }
-        button.density-option { padding-inline: 5px; font-size: 7px; }
         .command-row { grid-template-columns: minmax(0,1fr) 135px; }
         .pin-button { grid-column: 1 / -1; }
         .history-bar { grid-template-columns: 68px minmax(0,1fr) 68px; }
@@ -2837,10 +2771,6 @@
           <span class="brand-subtitle">Web Element Inspector · v${EXTENSION_VERSION}</span>
         </div>
         <div class="title-actions">
-          <div class="density-control" role="group" aria-label="表示密度">
-            <button class="density-option" type="button" data-density-option="compact" data-active="true" aria-pressed="true">COMPACT</button>
-            <button class="density-option" type="button" data-density-option="comfortable" data-active="false" aria-pressed="false">COMFORTABLE</button>
-          </div>
           <span class="frame-pill" hidden></span>
           <span class="mode-pill" data-mode="picking">SELECTING</span>
           <button class="icon-button close-button" type="button" data-action="close" aria-label="閉じる">
@@ -3156,7 +3086,6 @@
     ui.pickButton = panel.querySelector('[data-action="pick"]');
     ui.delayInput = panel.querySelector('input[type="number"]');
     ui.delayButton = panel.querySelector('[data-action="delay"]');
-    ui.densityButtons = Array.from(panel.querySelectorAll('[data-density-option]'));
     ui.backButton = panel.querySelector('[data-action="history-back"]');
     ui.historySelect = panel.querySelector('.history-select');
     ui.historyPosition = panel.querySelector('.history-position');
@@ -3248,9 +3177,6 @@
     panel.querySelector('[data-action="close"]').addEventListener('click', () => sendTopCommand('DEACTIVATE'));
     ui.pickButton.addEventListener('click', beginPicking);
     ui.delayButton.addEventListener('click', toggleCountdown);
-    for (const button of ui.densityButtons) {
-      button.addEventListener('click', () => setDensity(button.dataset.densityOption));
-    }
     ui.backButton.addEventListener('click', () => navigateHistory(-1));
     ui.historySelect.addEventListener('change', () => {
       const targetIndex = Number.parseInt(ui.historySelect.value, 10);
@@ -3309,7 +3235,6 @@
       handle.addEventListener('pointercancel', endPanelResize);
     }
 
-    setDensity(ui.density);
     renderUI();
     return panel;
   }
@@ -3363,14 +3288,13 @@
     clearUICountdown();
     for (const key of Object.keys(ui)) {
       if (['activeTab'].includes(key)) continue;
-      if (key === 'densityButtons' || key === 'tabButtons' || key === 'tabPanels' || key === 'jsonProfileButtons' || key === 'history' || key === 'pins') ui[key] = [];
+      if (key === 'tabButtons' || key === 'tabPanels' || key === 'jsonProfileButtons' || key === 'history' || key === 'pins') ui[key] = [];
       else if (key === 'countdownTimer') ui[key] = null;
       else if (key === 'countdownDeadline' || key === 'countdownRemaining') ui[key] = 0;
       else if (key === 'historyIndex') ui[key] = -1;
       else ui[key] = null;
     }
     ui.activeTab = 'overview';
-    ui.density = 'compact';
     ui.jsonProfile = 'standard';
     ui.ancestorExport = null;
     ui.ancestorExportPending = false;

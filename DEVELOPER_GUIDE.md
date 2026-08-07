@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.14.9`
+`0.15.0`
 
 ## 構成
 
@@ -45,7 +45,7 @@ Top frame content.js
 ├─ countdown
 ├─ selection history
 ├─ pinned snapshots / comparison
-├─ panel resize / density
+├─ panel resize
 ├─ styles / box model view
 ├─ temporary CSS editor
 ├─ accessibility / limited events view
@@ -135,7 +135,6 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 - 最大4件のピン留め比較
 - パネル横幅・高さ・斜めリサイズ
 - 通常時の最小360×440pxと、極小ビューポート時の利用可能領域への縮小
-- Compact / Comfortable密度切替
 - 遅延固定カウント
 - Locator単体コピー
 - JSONコピー・保存
@@ -379,15 +378,6 @@ Target frame
 
 リサイズ開始時に`right: auto`へ切り替え、現在の`left`、`top`、`width`、必要な場合は`height`を固定値へ変換します。左ハンドルは右端を、右ハンドルは左端を基準に幅を計算します。下端は上端を固定し、角ハンドルは辺より高い`z-index`で判定を優先します。
 
-密度はヘッダの2択セグメントから`panel.dataset.density`へ反映します。
-
-```text
-compact
-comfortable
-```
-
-`comfortable`ではヘッダ、操作部品、履歴バー、セクション余白、カード間隔をまとめて拡大し、`compact`との差が視覚的に分かるようにします。どちらもメモリ内状態だけで、Inspector終了時に`compact`へ戻します。結果レイアウトはCSS Container Queriesでパネル幅に追従します。
-
 ## 一時CSS編集
 
 ### 状態
@@ -567,7 +557,6 @@ npm test
 - 左下・右下からの斜めリサイズ
 - 440px最小高さと小さいビューポートでの補正
 - 360×440px未満のビューポートで、パネルが8px余白内へ収まること
-- Compact / Comfortable切替
 - 360px付近と620px以上でのレイアウト変化
 - Compareの1列・2列表示
 - タブの左右矢印、Home、End、非表示Compareのスキップ、Compare消滅時のOverviewフォーカス復帰

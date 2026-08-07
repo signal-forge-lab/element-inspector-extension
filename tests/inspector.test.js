@@ -635,10 +635,10 @@ test('manifest and static release contracts are aligned', () => {
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.14.9');
+  assert.equal(manifest.version, '0.15.0');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.14.9');
+  assert.equal(pkg.version, '0.15.0');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -713,12 +713,7 @@ test('manifest and static release contracts are aligned', () => {
   assert.match(content, /tabs button::after/);
   assert.match(content, /Prismora — Web Element Inspector/);
   assert.match(content, /Web Element Inspector · v\$\{EXTENSION_VERSION\}/);
-  assert.match(content, /data-density-option="compact"/);
-  assert.match(content, /data-density-option="comfortable"/);
-  assert.match(content, /button\.density-option\[data-active="false"\]:hover:not\(:disabled\)/);
-  assert.match(content, /button\.density-option\[data-active="true"\]:hover:not\(:disabled\)/);
-  assert.match(content, /data-density=/);
-  assert.match(content, /data-density="comfortable"[^\n]*button\.icon-button/);
+  assert.doesNotMatch(content, /density-control|density-option|data-density(?:-option)?|function setDensity|ui\.density/);
   assert.match(content, /history-position/);
   assert.match(content, /Selection history/);
   assert.match(content, /<span>戻る<\/span>/);

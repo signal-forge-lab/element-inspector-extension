@@ -1,6 +1,6 @@
 {
   "name": "prismora-web-element-inspector",
-  "version": "0.14.9",
+  "version": "0.15.0",
   "private": true,
   "scripts": {
     "check": "node --check background.js && node --check inspector.js && node --check content.js",
