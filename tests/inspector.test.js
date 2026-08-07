@@ -635,10 +635,10 @@ test('manifest and static release contracts are aligned', () => {
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.15.0');
+  assert.equal(manifest.version, '0.15.1');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.15.0');
+  assert.equal(pkg.version, '0.15.1');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -713,6 +713,13 @@ test('manifest and static release contracts are aligned', () => {
   assert.match(content, /tabs button::after/);
   assert.match(content, /Prismora — Web Element Inspector/);
   assert.match(content, /Web Element Inspector · v\$\{EXTENSION_VERSION\}/);
+  assert.match(content, /data-delay-action/);
+  assert.match(content, /value="selection-only"[^>]*>選択のみ/);
+  assert.match(content, /value="copy-json"[^>]*>JSONコピー/);
+  assert.match(content, /value="save-json"[^>]*>JSON保存/);
+  assert.match(content, /value="copy-css"[^>]*>CSS Selectorコピー/);
+  assert.match(content, /\.view-scroll \{[^}]*overflow-y: auto;[^}]*overflow-x: hidden;/s);
+  assert.match(content, /\.style-property-value \{[^}]*display: block;[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/s);
   assert.doesNotMatch(content, /density-control|density-option|data-density(?:-option)?|function setDensity|ui\.density/);
   assert.match(content, /history-position/);
   assert.match(content, /Selection history/);

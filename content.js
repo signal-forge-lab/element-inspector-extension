@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.15.0';
+  const EXTENSION_VERSION = '0.15.1';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -82,6 +82,7 @@
     pickButton: null,
     delayInput: null,
     delayButton: null,
+    delayActionSelect: null,
     backButton: null,
     historySelect: null,
     historyPosition: null,
@@ -892,6 +893,7 @@
     emitFrameEvent({
       kind: 'selected',
       reason,
+      delayed: Boolean(options.delayed),
       selectionId,
       historyMode: options.historyMode || 'push',
       statusMessage: options.statusMessage || null,
@@ -1981,11 +1983,16 @@
   function downloadJson() {
     const payload = currentJsonPayload();
     if (!payload) return;
-    const tag = ui.jsonProfile === 'ancestor-detail'
+    downloadJsonPayload(payload, ui.jsonProfile);
+  }
+
+  function downloadJsonPayload(payload, profile = 'standard') {
+    if (!payload) return;
+    const tag = profile === 'ancestor-detail'
       ? payload.selected?.tagName || 'element'
       : payload.selectedTag || 'element';
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = ui.jsonProfile === 'ancestor-detail'
+    const filename = profile === 'ancestor-detail'
       ? `prismora-ancestors-${tag}-${stamp}.json`
       : `prismora-${tag}-${stamp}.json`;
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
@@ -2000,6 +2007,29 @@
     anchor.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     setUIStatus(`${filename}を保存しました。`, 'success');
+  }
+
+  async function runDelayedSelectionAction(action, result) {
+    if (!result || action === 'selection-only') return;
+    try {
+      if (action === 'copy-json') {
+        await copyText(JSON.stringify(result, null, 2));
+        setUIStatus('遅延固定した要素のJSONをコピーしました。', 'success');
+        return;
+      }
+      if (action === 'save-json') {
+        downloadJsonPayload(result, 'standard');
+        return;
+      }
+      if (action === 'copy-css') {
+        const value = result.locators?.css?.value;
+        if (!value) throw new Error('CSS Selectorを生成できませんでした。');
+        await copyText(value);
+        setUIStatus('遅延固定した要素のCSS Selectorをコピーしました。', 'success');
+      }
+    } catch (error) {
+      setUIStatus(error instanceof Error ? error.message : String(error), 'error');
+    }
   }
 
   function handleTopEvent(event) {
@@ -2035,6 +2065,9 @@
     }
 
     if (event.kind === 'selected' && event.result) {
+      const delayedAction = event.delayed
+        ? ui.delayActionSelect?.value || 'selection-only'
+        : 'selection-only';
       clearUICountdown();
       if (event.historyMode === 'refresh') {
         if (ui.historyIndex >= 0 && ui.history[ui.historyIndex]) {
@@ -2057,6 +2090,9 @@
       setUIStatus(event.statusMessage || `${event.reason || '選択'}で対象を固定しました。`, 'success');
       renderUI();
       if (ui.jsonProfile === 'ancestor-detail') requestAncestorExport();
+      if (delayedAction !== 'selection-only') {
+        void runDelayedSelectionAction(delayedAction, event.result);
+      }
       return;
     }
 
@@ -2409,6 +2445,9 @@
       .status[data-kind="error"] { color: var(--ei-danger); }
       .command-row { display: grid; grid-template-columns: minmax(0,1fr) 142px auto; gap: 7px; margin-top: 8px; }
       .delay-control { display: grid; grid-template-columns: 43px 1fr; gap: 5px; }
+      .delay-post-action { display: flex; align-items: center; justify-content: flex-end; gap: 7px; margin-top: 6px; }
+      .delay-post-action span { color: var(--ei-faint); font-size: 7.5px; font-weight: 700; letter-spacing: .055em; text-transform: uppercase; }
+      .delay-post-action select { min-width: 154px; min-height: 29px; font-size: 8.5px; }
       .history-surface {
         padding: 9px 11px 10px;
         border-top: 1px solid var(--ei-line);
@@ -2485,7 +2524,7 @@
       }
       .tabs button[data-active="true"] { color: var(--ei-ink); }
       .tabs button[data-active="true"]::after { transform: scaleX(1); }
-      .view-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 10px 1px 8px; }
+      .view-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 10px 1px 8px; }
       .tab-panel { margin: 0; }
       .tab-panel[hidden] { display: none; }
       .section-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 7px; }
@@ -2536,9 +2575,9 @@
       .style-property-name-wrap { display: flex; align-items: center; gap: 5px; min-width: 0; }
       .style-property-name { overflow: hidden; color: var(--ei-faint); text-overflow: ellipsis; white-space: nowrap; font-size: 8.5px; }
       .style-property-badge { flex: 0 0 auto; border: 1px solid rgba(75,97,119,.24); border-radius: 999px; padding: 1px 4px; color: #4b6177; background: rgba(255,255,255,.62); font-size: 6.5px; font-weight: 750; letter-spacing: .045em; }
-      .style-property-value-wrap { min-width: 0; text-align: right; }
-      .style-property-value { overflow: hidden; color: #29313a; text-align: right; text-overflow: ellipsis; white-space: nowrap; font: 9.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
-      .style-property-diff { display: block; overflow: hidden; margin-top: 1px; color: var(--ei-muted); text-overflow: ellipsis; white-space: nowrap; font: 7.5px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .style-property-value-wrap { min-width: 0; overflow: hidden; text-align: right; }
+      .style-property-value { display: block; max-width: 100%; color: #29313a; text-align: right; white-space: normal; overflow-wrap: anywhere; font: 9.5px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
+      .style-property-diff { display: block; max-width: 100%; margin-top: 1px; color: var(--ei-muted); white-space: normal; overflow-wrap: anywhere; font: 7.5px/1.35 ui-monospace,SFMono-Regular,Consolas,monospace; }
       button.style-edit-button { min-height: 25px; padding: 3px 7px; font-size: 8px; }
       .style-empty { grid-column: 1 / -1; border: 1px dashed var(--ei-line-strong); border-radius: 8px; padding: 10px 8px; color: var(--ei-muted); text-align: center; font-size: 8.5px; }
       .edit-grid, .audit-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
@@ -2711,6 +2750,9 @@
         .brand-subtitle { display: none; }
         .command-row { grid-template-columns: minmax(0,1fr) 135px; }
         .pin-button { grid-column: 1 / -1; }
+        .delay-post-action { align-items: stretch; justify-content: stretch; }
+        .delay-post-action span { align-self: center; }
+        .delay-post-action select { flex: 1 1 auto; min-width: 0; }
         .history-bar { grid-template-columns: 68px minmax(0,1fr) 68px; }
         .json-profile-head { align-items: stretch; flex-direction: column; }
         .json-profile-control { display: grid; grid-template-columns: 1fr 1fr; }
@@ -2796,6 +2838,15 @@
               </div>
               <button class="pin-button" type="button" data-action="pin" aria-pressed="false">Pin <span class="pin-count">0</span></button>
             </div>
+            <label class="delay-post-action">
+              <span>遅延固定後</span>
+              <select data-delay-action aria-label="遅延固定後の自動操作">
+                <option value="selection-only">選択のみ</option>
+                <option value="copy-json">JSONコピー</option>
+                <option value="save-json">JSON保存</option>
+                <option value="copy-css">CSS Selectorコピー</option>
+              </select>
+            </label>
           </section>
 
           <section class="history-surface" aria-label="選択履歴">
@@ -3086,6 +3137,7 @@
     ui.pickButton = panel.querySelector('[data-action="pick"]');
     ui.delayInput = panel.querySelector('input[type="number"]');
     ui.delayButton = panel.querySelector('[data-action="delay"]');
+    ui.delayActionSelect = panel.querySelector('[data-delay-action]');
     ui.backButton = panel.querySelector('[data-action="history-back"]');
     ui.historySelect = panel.querySelector('.history-select');
     ui.historyPosition = panel.querySelector('.history-position');
@@ -3359,7 +3411,7 @@
     }
     if (command === 'FIX_HOVER') {
       if (isElement(frameState.hoveredElement) && frameState.hoveredElement.isConnected) {
-        inspectAndSelect(frameState.hoveredElement, '遅延固定');
+        inspectAndSelect(frameState.hoveredElement, '遅延固定', { delayed: true });
       } else {
         emitFrameEvent({
           kind: 'status',

@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.15.0`
+`0.15.1`
 
 ## 構成
 
@@ -136,6 +136,7 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 - パネル横幅・高さ・斜めリサイズ
 - 通常時の最小360×440pxと、極小ビューポート時の利用可能領域への縮小
 - 遅延固定カウント
+- 遅延固定直後の選択のみ / Standard JSONコピー・保存 / CSS Selectorコピー
 - Locator単体コピー
 - JSONコピー・保存
 - 編集CSSコピー
@@ -150,6 +151,10 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 この`postMessage`経路はページから観測可能であり、tokenは認証境界ではありません。tokenは最大128文字の相関IDとしてのみ扱い、contextは最大深度16、path長一致、`iframe` / `frame`というshapeだけを保持します。受信したCSS文字列は保存せず`null`へ正規化します。消滅した子frameのWindow参照は、新しい`HELLO`受付時とContext再送時にMapから削除します。
 
 固定要素の切断、子frameの`pagehide`、選択frameの新しい`FRAME_READY`を`selectionInvalidated`へ統一します。Backgroundはframe IDとselection IDの両方が現在値と一致する場合だけ選択状態を解除し、全フレームへ`START_PICKING`をbroadcastします。トップframe再読み込み時も古い選択ルーティングを破棄します。
+
+遅延固定の`FIX_HOVER`で生成する`selected`イベントだけに`delayed: true`を付与します。トップフレームはそのイベントを受信した直後、`遅延固定後`プルダウンの現在値に応じて、すでに取得済みのStandard結果をコピー・保存します。通常クリック、履歴復元、Hierarchy移動、再解析では自動処理しません。追加のChrome権限やStorageは使用しません。
+
+Stylesの長いComputed Style値はカード内で折り返し、外側の`.view-scroll`は縦スクロールだけを担当します。LocatorやJSONのコード表示は各`.code-box`自身が必要なスクロールを保持します。
 
 ## `inspector.js`
 

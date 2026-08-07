@@ -39,6 +39,9 @@ function createContentHarness(options = {}) {
       handleTopEvent,
       beginPicking,
       toggleCountdown,
+      runDelayedSelectionAction: typeof runDelayedSelectionAction === 'function'
+        ? runDelayedSelectionAction
+        : null,
       setActiveTab,
       renderPinnedComparisons,
       inspectAndSelect,
@@ -59,6 +62,7 @@ function createContentHarness(options = {}) {
   const runtimeMessages = [];
   const parentMessages = [];
   const messageListeners = [];
+  const clipboardWrites = [];
   let frameElements = [];
   let frameLocatorCalls = 0;
 
@@ -130,7 +134,13 @@ function createContentHarness(options = {}) {
     window,
     document,
     location: { href: 'https://example.test/' },
-    navigator: {},
+    navigator: {
+      clipboard: {
+        async writeText(text) {
+          clipboardWrites.push(text);
+        }
+      }
+    },
     Element: FakeElement,
     HTMLElement: FakeElement,
     CSS: { supports: () => true },
@@ -176,6 +186,7 @@ function createContentHarness(options = {}) {
     runtimeMessages,
     parentMessages,
     parentWindow,
+    clipboardWrites,
     frameLocatorCallCount() {
       return frameLocatorCalls;
     },
@@ -184,6 +195,28 @@ function createContentHarness(options = {}) {
     }
   };
 }
+
+test('delayed selection actions copy Standard JSON or CSS without another panel interaction', async () => {
+  const harness = createContentHarness();
+  assert.equal(typeof harness.api.runDelayedSelectionAction, 'function');
+  const result = {
+    selectedTag: 'button',
+    selectedText: 'Transient menu item',
+    locators: {
+      css: { value: '#transient-item' }
+    }
+  };
+
+  await harness.api.runDelayedSelectionAction('selection-only', result);
+  assert.deepEqual(harness.clipboardWrites, []);
+
+  await harness.api.runDelayedSelectionAction('copy-json', result);
+  assert.equal(harness.clipboardWrites.length, 1);
+  assert.deepEqual(JSON.parse(harness.clipboardWrites[0]), result);
+
+  await harness.api.runDelayedSelectionAction('copy-css', result);
+  assert.equal(harness.clipboardWrites[1], '#transient-item');
+});
 
 function createFrameElement(sourceWindow) {
   return {
