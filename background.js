@@ -270,7 +270,12 @@
         return false;
       }
 
-      if (command === 'NAVIGATE' || command === 'SELECT_CHILD') {
+      if (
+        command === 'NAVIGATE' ||
+        command === 'SELECT_CHILD' ||
+        command === 'PREVIEW_CHILD' ||
+        command === 'CLEAR_CHILD_PREVIEW'
+      ) {
         if (!Number.isInteger(state.selectedFrameId)) {
           sendResponse({ ok: false, error: 'no selected frame' });
           return false;

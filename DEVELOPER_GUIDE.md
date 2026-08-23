@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.15.1`
+`0.15.2`
 
 ## 構成
 
@@ -131,6 +131,7 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 - Overview / Styles / Edit / A11y / Locators / Compare / JSONタブ
 - ARIA tab / tabpanel契約とロービングtabindex、左右矢印・Home・Endによるキーボード移動
 - 固定Hierarchy領域
+- 子要素listboxのhover / focusプレビューとキャンセル時のhighlight復帰
 - 選択履歴の戻る・進む・直接選択
 - 最大4件のピン留め比較
 - パネル横幅・高さ・斜めリサイズ

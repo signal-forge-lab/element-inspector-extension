@@ -149,6 +149,8 @@ test('recovers active and selected frame routing for countdown, navigation, edit
   const cases = [
     { command: 'FIX_ACTIVE_HOVER', routedCommand: 'FIX_HOVER', targetFrameId: 5 },
     { command: 'NAVIGATE', routedCommand: 'NAVIGATE', targetFrameId: 7 },
+    { command: 'PREVIEW_CHILD', routedCommand: 'PREVIEW_CHILD', targetFrameId: 7 },
+    { command: 'CLEAR_CHILD_PREVIEW', routedCommand: 'CLEAR_CHILD_PREVIEW', targetFrameId: 7 },
     { command: 'APPLY_EDIT', routedCommand: 'APPLY_EDIT', targetFrameId: 7 },
     { command: 'REQUEST_ANCESTOR_EXPORT', routedCommand: 'REQUEST_ANCESTOR_EXPORT', targetFrameId: 7 }
   ];

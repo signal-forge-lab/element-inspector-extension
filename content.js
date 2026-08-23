@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.15.1';
+  const EXTENSION_VERSION = '0.15.2';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -99,7 +99,8 @@
     nextButton: null,
     firstChildButton: null,
     lastChildButton: null,
-    childSelect: null,
+    childPickerTrigger: null,
+    childPickerMenu: null,
     siblingMetric: null,
     childMetric: null,
     tagValue: null,
@@ -952,10 +953,24 @@
     inspectAndSelect(target, '階層移動');
   }
 
-  function selectChildByIndex(index) {
+  function childElementByIndex(index) {
     const selected = frameState.selectedElement;
+    if (!isElement(selected) || !selected.isConnected) return null;
     const children = globalThis.ElementInspector?.getNavigableChildren?.(selected) || [];
-    const child = children[index]?.element || selected?.children?.[index];
+    return children[index]?.element || selected.children?.[index] || null;
+  }
+
+  function previewChildByIndex(index) {
+    const child = childElementByIndex(index);
+    if (isElement(child) && child.isConnected) setHighlightTarget(child);
+  }
+
+  function restoreSelectedHighlight() {
+    setHighlightTarget(frameState.selectedElement);
+  }
+
+  function selectChildByIndex(index) {
+    const child = childElementByIndex(index);
     if (!isElement(child)) {
       emitFrameEvent({
         kind: 'status',
@@ -996,6 +1011,9 @@
   }
 
   function onDocumentClick(event) {
+    if (frameState.isTopFrame && childPickerIsOpen() && !isInspectorEvent(event)) {
+      ui.childPickerMenu.hidePopover();
+    }
     if (!frameState.active || frameState.mode !== 'picking' || isInspectorEvent(event)) return;
     const element = resolveEventElement(event);
     if (!isElement(element)) return;
@@ -1008,6 +1026,11 @@
     if (!frameState.active || !frameState.isTopFrame) return;
     if (event.key !== 'Escape') return;
     event.preventDefault();
+    if (childPickerIsOpen()) {
+      event.stopImmediatePropagation();
+      closeChildPicker({ focusTrigger: true });
+      return;
+    }
     sendTopCommand('DEACTIVATE');
   }
 
@@ -1589,12 +1612,18 @@
     ui.firstChildButton.disabled = !result?.navigation?.childCount;
     ui.lastChildButton.disabled = !result?.navigation?.childCount;
 
-    ui.childSelect.disabled = !result?.navigation?.childCount;
-    ui.childSelect.replaceChildren(new Option('子要素を選択…', ''));
+    ui.childPickerTrigger.disabled = !result?.navigation?.childCount;
+    ui.childPickerMenu.replaceChildren();
     const hasShadowChildren = Boolean(result?.navigation?.children?.some(child => child.treeScope === 'shadow'));
     for (const child of result?.navigation?.children || []) {
       const scope = hasShadowChildren ? `${child.treeScope === 'shadow' ? 'Shadow' : 'Light'} · ` : '';
-      ui.childSelect.appendChild(new Option(`${child.index + 1}. ${scope}${child.label}`, String(child.index)));
+      const option = document.createElement('div');
+      option.className = 'child-picker-option';
+      option.setAttribute('role', 'option');
+      option.tabIndex = -1;
+      option.dataset.childIndex = String(child.index);
+      option.textContent = `${child.index + 1}. ${scope}${child.label}`;
+      ui.childPickerMenu.appendChild(option);
     }
 
     ui.siblingMetric.textContent = hasResult
@@ -1817,6 +1846,50 @@
     ui.pendingHistoryIndex = null;
     ui.ancestorExport = null;
     ui.ancestorExportPending = false;
+  }
+
+  function childPickerIsOpen() {
+    return Boolean(ui.childPickerMenu?.matches?.(':popover-open'));
+  }
+
+  function previewChildOption(option) {
+    const index = Number.parseInt(option?.dataset?.childIndex, 10);
+    if (!Number.isInteger(index)) return;
+    sendTopCommand('PREVIEW_CHILD', { childIndex: index });
+  }
+
+  function positionChildPicker() {
+    const trigger = ui.childPickerTrigger;
+    const menu = ui.childPickerMenu;
+    if (!trigger || !menu) return;
+    const triggerRect = trigger.getBoundingClientRect();
+    menu.style.left = `${Math.round(triggerRect.left)}px`;
+    menu.style.top = `${Math.round(triggerRect.bottom + 4)}px`;
+    menu.style.width = `${Math.round(triggerRect.width)}px`;
+    const menuRect = menu.getBoundingClientRect();
+    if (menuRect.bottom > window.innerHeight - 8) {
+      menu.style.top = `${Math.max(8, Math.round(triggerRect.top - menuRect.height - 4))}px`;
+    }
+  }
+
+  function openChildPicker() {
+    if (ui.childPickerTrigger?.disabled || !ui.childPickerMenu || childPickerIsOpen()) return;
+    ui.childPickerMenu.showPopover();
+    positionChildPicker();
+    ui.childPickerMenu.querySelector('[data-child-index]')?.focus();
+  }
+
+  function closeChildPicker(options = {}) {
+    if (!childPickerIsOpen()) return;
+    ui.childPickerMenu.hidePopover();
+    if (options.focusTrigger) ui.childPickerTrigger?.focus();
+  }
+
+  function moveChildPickerFocus(option, delta) {
+    const options = Array.from(ui.childPickerMenu?.querySelectorAll?.('[data-child-index]') || []);
+    const index = options.indexOf(option);
+    if (index < 0 || !options.length) return;
+    options[(index + delta + options.length) % options.length].focus();
   }
 
   function beginPicking() {
@@ -2492,7 +2565,45 @@
       .metrics b { color: #4e5964; font-weight: 650; }
       .nav-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
       .nav-grid button { min-width: 0; min-height: 29px; padding-inline: 4px; font-size: 9.5px; }
-      .child-select { margin-top: 6px; }
+      .child-picker { margin-top: 6px; }
+      button.child-picker-trigger {
+        display: flex;
+        width: 100%;
+        min-height: 31px;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 5px 9px;
+        text-align: left;
+      }
+      .child-picker-trigger::after { content: '⌄'; color: var(--ei-faint); font-size: 12px; line-height: 1; }
+      .child-picker-menu {
+        position: fixed;
+        z-index: 2147483647;
+        max-height: min(220px, calc(100vh - 16px));
+        margin: 0;
+        overflow-y: auto;
+        border: 1px solid var(--ei-line-strong);
+        border-radius: 9px;
+        padding: 4px;
+        background: #f8fafb;
+        box-shadow: 0 10px 28px rgba(32,38,45,.18);
+        color: var(--ei-ink);
+      }
+      .child-picker-option {
+        min-width: 0;
+        border-radius: 6px;
+        padding: 7px 8px;
+        overflow: hidden;
+        color: #39424c;
+        cursor: default;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 9.5px;
+      }
+      .child-picker-option:hover,
+      .child-picker-option:focus { outline: none; background: rgba(32,38,45,.075); }
+      .child-picker-option:focus-visible { box-shadow: inset 0 0 0 2px rgba(75,97,119,.34); }
       .tabs {
         display: flex;
         flex: 0 0 auto;
@@ -2879,7 +2990,10 @@
               <button type="button" data-nav="firstChild">最初の子</button>
               <button type="button" data-nav="lastChild">最後の子</button>
             </div>
-            <select class="child-select" aria-label="子要素を選択"></select>
+            <div class="child-picker">
+              <button class="child-picker-trigger" type="button" data-child-picker-trigger aria-haspopup="listbox" aria-expanded="false" aria-controls="ei-child-picker-menu">子要素を選択…</button>
+              <div class="child-picker-menu" id="ei-child-picker-menu" role="listbox" aria-label="子要素を選択" popover="manual"></div>
+            </div>
           </section>
         </div>
 
@@ -3154,7 +3268,8 @@
     ui.nextButton = panel.querySelector('[data-nav="next"]');
     ui.firstChildButton = panel.querySelector('[data-nav="firstChild"]');
     ui.lastChildButton = panel.querySelector('[data-nav="lastChild"]');
-    ui.childSelect = panel.querySelector('.child-select');
+    ui.childPickerTrigger = panel.querySelector('[data-child-picker-trigger]');
+    ui.childPickerMenu = panel.querySelector('.child-picker-menu');
     ui.siblingMetric = panel.querySelector('[data-value="sibling"]');
     ui.childMetric = panel.querySelector('[data-value="children"]');
     ui.tagValue = panel.querySelector('[data-value="tag"]');
@@ -3222,7 +3337,10 @@
     ui.header.addEventListener('pointermove', movePanel);
     ui.header.addEventListener('pointerup', endPanelDrag);
     ui.header.addEventListener('pointercancel', endPanelDrag);
-    panel.addEventListener('pointerdown', event => event.stopPropagation());
+    panel.addEventListener('pointerdown', event => {
+      event.stopPropagation();
+      if (childPickerIsOpen() && !event.target.closest?.('.child-picker')) closeChildPicker();
+    });
     panel.addEventListener('click', event => event.stopPropagation());
     panel.addEventListener('wheel', event => event.stopPropagation());
 
@@ -3259,10 +3377,49 @@
     for (const button of panel.querySelectorAll('[data-nav]')) {
       button.addEventListener('click', () => sendTopCommand('NAVIGATE', { direction: button.dataset.nav }));
     }
-    ui.childSelect.addEventListener('change', () => {
-      if (ui.childSelect.value === '') return;
-      sendTopCommand('SELECT_CHILD', { childIndex: Number.parseInt(ui.childSelect.value, 10) });
-      ui.childSelect.value = '';
+    ui.childPickerTrigger.addEventListener('click', () => {
+      if (childPickerIsOpen()) closeChildPicker({ focusTrigger: true });
+      else openChildPicker();
+    });
+    ui.childPickerMenu.addEventListener('toggle', event => {
+      const open = event.newState === 'open';
+      ui.childPickerTrigger.setAttribute('aria-expanded', String(open));
+      if (!open) sendTopCommand('CLEAR_CHILD_PREVIEW');
+    });
+    ui.childPickerMenu.addEventListener('pointerover', event => {
+      const option = event.target.closest?.('[data-child-index]');
+      if (option) previewChildOption(option);
+    });
+    ui.childPickerMenu.addEventListener('focusin', event => {
+      const option = event.target.closest?.('[data-child-index]');
+      if (option) previewChildOption(option);
+    });
+    ui.childPickerMenu.addEventListener('click', event => {
+      const option = event.target.closest?.('[data-child-index]');
+      const childIndex = Number.parseInt(option?.dataset?.childIndex, 10);
+      if (!Number.isInteger(childIndex)) return;
+      sendTopCommand('SELECT_CHILD', { childIndex });
+      closeChildPicker();
+    });
+    ui.childPickerMenu.addEventListener('keydown', event => {
+      const option = event.target.closest?.('[data-child-index]');
+      if (!option) return;
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        moveChildPickerFocus(option, event.key === 'ArrowDown' ? 1 : -1);
+      } else if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        const options = Array.from(ui.childPickerMenu.querySelectorAll('[data-child-index]'));
+        options[event.key === 'Home' ? 0 : options.length - 1]?.focus();
+      } else if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        option.click();
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeChildPicker({ focusTrigger: true });
+      } else if (event.key === 'Tab') {
+        closeChildPicker();
+      }
     });
     for (const button of panel.querySelectorAll('[data-copy]')) {
       button.addEventListener('click', () => copyLocator(button.dataset.copy));
@@ -3427,6 +3584,14 @@
     }
     if (command === 'SELECT_CHILD') {
       selectChildByIndex(message.childIndex);
+      return;
+    }
+    if (command === 'PREVIEW_CHILD') {
+      previewChildByIndex(message.childIndex);
+      return;
+    }
+    if (command === 'CLEAR_CHILD_PREVIEW') {
+      restoreSelectedHighlight();
       return;
     }
     if (command === 'APPLY_EDIT') {

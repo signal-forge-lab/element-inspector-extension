@@ -45,6 +45,15 @@ function createContentHarness(options = {}) {
       setActiveTab,
       renderPinnedComparisons,
       inspectAndSelect,
+      previewChildByIndex: typeof previewChildByIndex === 'function'
+        ? previewChildByIndex
+        : null,
+      restoreSelectedHighlight: typeof restoreSelectedHighlight === 'function'
+        ? restoreSelectedHighlight
+        : null,
+      onDocumentKeyDown: typeof onDocumentKeyDown === 'function'
+        ? onDocumentKeyDown
+        : null,
       clampPanelWidth,
       clampPanelHeight,
       handleTabKeyDown: typeof handleTabKeyDown === 'function'
@@ -174,6 +183,9 @@ function createContentHarness(options = {}) {
             jsPath: { value: 'document.querySelector("button")' }
           }
         };
+      },
+      getNavigableChildren() {
+        return options.navigableChildren || [];
       }
     },
     globalThis: null
@@ -216,6 +228,73 @@ test('delayed selection actions copy Standard JSON or CSS without another panel 
 
   await harness.api.runDelayedSelectionAction('copy-css', result);
   assert.equal(harness.clipboardWrites[1], '#transient-item');
+});
+
+test('previews a child without changing selection and restores the original highlight on cancel', () => {
+  const parent = new FakeElement({ connected: true });
+  const child = new FakeElement({ connected: true });
+  const harness = createContentHarness({
+    navigableChildren: [{ element: child }]
+  });
+  Object.assign(harness.api.frameState, {
+    active: true,
+    mode: 'fixed',
+    selectedElement: parent,
+    currentSelectionId: 'selection-parent',
+    highlightedElement: parent
+  });
+
+  assert.equal(typeof harness.api.previewChildByIndex, 'function');
+  assert.equal(typeof harness.api.restoreSelectedHighlight, 'function');
+
+  harness.api.previewChildByIndex(0);
+  assert.equal(harness.api.frameState.selectedElement, parent);
+  assert.equal(harness.api.frameState.currentSelectionId, 'selection-parent');
+  assert.equal(harness.api.frameState.highlightedElement, child);
+
+  harness.api.restoreSelectedHighlight();
+  assert.equal(harness.api.frameState.selectedElement, parent);
+  assert.equal(harness.api.frameState.currentSelectionId, 'selection-parent');
+  assert.equal(harness.api.frameState.highlightedElement, parent);
+});
+
+test('Escape cancels an open child preview instead of closing Prismora', () => {
+  const harness = createContentHarness();
+  let open = true;
+  let triggerFocused = false;
+  harness.api.frameState.active = true;
+  harness.api.ui.childPickerMenu = {
+    matches(selector) {
+      return selector === ':popover-open' && open;
+    },
+    hidePopover() {
+      open = false;
+    }
+  };
+  harness.api.ui.childPickerTrigger = {
+    focus() {
+      triggerFocused = true;
+    }
+  };
+  const event = {
+    key: 'Escape',
+    defaultPrevented: false,
+    propagationStopped: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
+    stopImmediatePropagation() {
+      this.propagationStopped = true;
+    }
+  };
+
+  harness.api.onDocumentKeyDown(event);
+
+  assert.equal(open, false);
+  assert.equal(triggerFocused, true);
+  assert.equal(event.defaultPrevented, true);
+  assert.equal(event.propagationStopped, true);
+  assert.equal(harness.runtimeMessages.some(message => message.command === 'DEACTIVATE'), false);
 });
 
 function createFrameElement(sourceWindow) {
