@@ -37,6 +37,12 @@ function createContentHarness(options = {}) {
         ? requestChildFrameContexts
         : null,
       handleTopEvent,
+      handleTopCommandFailure: typeof handleTopCommandFailure === 'function'
+        ? handleTopCommandFailure
+        : null,
+      closeChildPicker: typeof closeChildPicker === 'function'
+        ? closeChildPicker
+        : null,
       beginPicking,
       toggleCountdown,
       runDelayedSelectionAction: typeof runDelayedSelectionAction === 'function'
@@ -295,6 +301,43 @@ test('Escape cancels an open child preview instead of closing Prismora', () => {
   assert.equal(event.defaultPrevented, true);
   assert.equal(event.propagationStopped, true);
   assert.equal(harness.runtimeMessages.some(message => message.command === 'DEACTIVATE'), false);
+});
+
+test('does not surface transient child preview messaging failures as operation errors', () => {
+  const harness = createContentHarness();
+  assert.equal(typeof harness.api.handleTopCommandFailure, 'function');
+  harness.api.ui.panel = {};
+
+  assert.doesNotThrow(() => {
+    harness.api.handleTopCommandFailure(
+      'CLEAR_CHILD_PREVIEW',
+      'The message port closed before a response was received'
+    );
+  });
+});
+
+test('restores child preview on cancel but not after selection commit', () => {
+  const harness = createContentHarness();
+  assert.equal(typeof harness.api.closeChildPicker, 'function');
+  const menu = {
+    matches() { return true; },
+    hidePopover() {}
+  };
+  harness.api.ui.childPickerMenu = menu;
+  harness.api.ui.childPickerTrigger = { focus() {} };
+
+  harness.api.closeChildPicker();
+  assert.equal(
+    harness.runtimeMessages.some(message => message.command === 'CLEAR_CHILD_PREVIEW'),
+    true
+  );
+
+  harness.runtimeMessages.length = 0;
+  harness.api.closeChildPicker({ restorePreview: false });
+  assert.equal(
+    harness.runtimeMessages.some(message => message.command === 'CLEAR_CHILD_PREVIEW'),
+    false
+  );
 });
 
 function createFrameElement(sourceWindow) {

@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.15.2`
+`0.15.3`
 
 - [変更履歴](CHANGELOG.md)
 - [プライバシーポリシー](PRIVACY.md)

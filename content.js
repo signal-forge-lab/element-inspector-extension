@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.15.2';
+  const EXTENSION_VERSION = '0.15.3';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -243,6 +243,7 @@
   }
 
   function handleTopCommandFailure(command, error) {
+    if (command === 'PREVIEW_CHILD' || command === 'CLEAR_CHILD_PREVIEW') return;
     if (!frameState.isTopFrame || !ui.panel) return;
     if (command === 'REQUEST_ANCESTOR_EXPORT') {
       ui.ancestorExportPending = false;
@@ -1012,7 +1013,7 @@
 
   function onDocumentClick(event) {
     if (frameState.isTopFrame && childPickerIsOpen() && !isInspectorEvent(event)) {
-      ui.childPickerMenu.hidePopover();
+      closeChildPicker();
     }
     if (!frameState.active || frameState.mode !== 'picking' || isInspectorEvent(event)) return;
     const element = resolveEventElement(event);
@@ -1882,6 +1883,7 @@
   function closeChildPicker(options = {}) {
     if (!childPickerIsOpen()) return;
     ui.childPickerMenu.hidePopover();
+    if (options.restorePreview !== false) sendTopCommand('CLEAR_CHILD_PREVIEW');
     if (options.focusTrigger) ui.childPickerTrigger?.focus();
   }
 
@@ -3384,7 +3386,6 @@
     ui.childPickerMenu.addEventListener('toggle', event => {
       const open = event.newState === 'open';
       ui.childPickerTrigger.setAttribute('aria-expanded', String(open));
-      if (!open) sendTopCommand('CLEAR_CHILD_PREVIEW');
     });
     ui.childPickerMenu.addEventListener('pointerover', event => {
       const option = event.target.closest?.('[data-child-index]');
@@ -3398,8 +3399,8 @@
       const option = event.target.closest?.('[data-child-index]');
       const childIndex = Number.parseInt(option?.dataset?.childIndex, 10);
       if (!Number.isInteger(childIndex)) return;
+      closeChildPicker({ restorePreview: false });
       sendTopCommand('SELECT_CHILD', { childIndex });
-      closeChildPicker();
     });
     ui.childPickerMenu.addEventListener('keydown', event => {
       const option = event.target.closest?.('[data-child-index]');
