@@ -9,6 +9,16 @@
   const MAX_CHILD_SUMMARIES = 80;
   const MAX_EVENT_HANDLER_PREVIEW = 320;
   const MAX_CUSTOM_PROPERTIES = 200;
+  const MAX_AI_SNAPSHOT_ELEMENTS = 500;
+  const MAX_AI_SNAPSHOT_LENGTH = 16000;
+  const MAX_AI_SNAPSHOT_TEXT = 320;
+  const MAX_AI_SNAPSHOT_DEPTH = 40;
+  const AI_SNAPSHOT_ATOMIC_ROLES = new Set([
+    'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'switch',
+    'slider', 'spinbutton', 'combobox', 'option', 'tab', 'treeitem',
+    'img', 'progressbar', 'meter', 'menuitem', 'interactive', 'iframe',
+    'canvas', 'video', 'audio'
+  ]);
   const VOID_ELEMENT_NAMES = new Set([
     'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
     'link', 'meta', 'param', 'source', 'track', 'wbr'
@@ -289,6 +299,186 @@
       },
       ariaAttributes: collectAriaAttributes(element)
     };
+  }
+
+  function isAiSnapshotVisible(element) {
+    if (!isDomElement(element)) return false;
+    const style = getComputedStyleForElement(element);
+    const visibility = readComputedStyleValue(style, 'visibility');
+    const opacity = Number.parseFloat(readComputedStyleValue(style, 'opacity'));
+    return !element.hasAttribute?.('hidden') &&
+      ariaValue(element, 'hidden') !== 'true' &&
+      readComputedStyleValue(style, 'display') !== 'none' &&
+      visibility !== 'hidden' &&
+      visibility !== 'collapse' &&
+      !(Number.isFinite(opacity) && opacity === 0);
+  }
+
+  function aiSnapshotRole(element, accessibility) {
+    const tagName = getTagName(element);
+    const type = String(element.getAttribute?.('type') || '').toLowerCase();
+    let role = accessibility?.role || null;
+    if (role === 'none' || role === 'presentation') role = null;
+    if (!role && tagName === 'input' && type === 'password') role = 'textbox';
+    if (!role && accessibility?.focus?.contentEditable) role = 'textbox';
+    if (!role && tagName === 'section' && accessibility?.name?.value) role = 'region';
+    if (!role && tagName === 'form' && accessibility?.name?.value) role = 'form';
+    if (!role && tagName === 'iframe') role = 'iframe';
+    if (!role && ['canvas', 'video', 'audio'].includes(tagName)) role = tagName;
+    if (
+      !role &&
+      (accessibility?.focus?.focusable || element.hasAttribute?.('onclick') || typeof element.onclick === 'function')
+    ) {
+      role = 'interactive';
+    }
+    return role;
+  }
+
+  function clipAiSnapshotText(value) {
+    const text = normalizeText(value);
+    return text.length > MAX_AI_SNAPSHOT_TEXT
+      ? `${text.slice(0, MAX_AI_SNAPSHOT_TEXT - 1)}…`
+      : text;
+  }
+
+  function quoteAiSnapshotText(value) {
+    return JSON.stringify(clipAiSnapshotText(value));
+  }
+
+  function aiSnapshotValue(element, role) {
+    const tagName = getTagName(element);
+    const type = String(element.getAttribute?.('type') || '').toLowerCase();
+    if (tagName === 'input' && type === 'password') return '[hidden]';
+    if (['checkbox', 'radio', 'button'].includes(role)) return '';
+    if (tagName === 'select') {
+      const selectedText = Array.from(element.selectedOptions || [])
+        .map(option => normalizeText(option.textContent))
+        .filter(Boolean)
+        .join(', ');
+      if (selectedText) return quoteAiSnapshotText(selectedText);
+    }
+    if (
+      ['textbox', 'searchbox', 'slider', 'spinbutton', 'combobox'].includes(role) ||
+      ['input', 'textarea', 'select'].includes(tagName)
+    ) {
+      const value = element.value ?? element.getAttribute?.('value') ?? '';
+      const normalized = normalizeText(value);
+      if (normalized) return quoteAiSnapshotText(normalized);
+    }
+    if (
+      role === 'textbox' &&
+      element.hasAttribute?.('contenteditable') &&
+      element.getAttribute?.('contenteditable') !== 'false'
+    ) {
+      const value = normalizeText(element.textContent);
+      if (value) return quoteAiSnapshotText(value);
+    }
+    return '';
+  }
+
+  function aiSnapshotStateTokens(accessibility) {
+    const states = accessibility?.states || {};
+    const tokens = [];
+    if (states.disabled) tokens.push('disabled');
+    if (states.required) tokens.push('required');
+    if (states.readOnly) tokens.push('readonly');
+    if (states.checked === true || states.checked === 'true') tokens.push('checked');
+    if (states.selected === true || states.selected === 'true') tokens.push('selected');
+    if (states.expanded === 'true') tokens.push('expanded');
+    if (states.expanded === 'false') tokens.push('collapsed');
+    if (states.pressed === 'true') tokens.push('pressed');
+    if (states.pressed === 'false') tokens.push('not-pressed');
+    if (states.invalid && states.invalid !== 'false') tokens.push('invalid');
+    if (states.current && states.current !== 'false') tokens.push(`current=${quoteAiSnapshotText(states.current)}`);
+    if (states.busy === 'true') tokens.push('busy');
+    return tokens;
+  }
+
+  function aiSnapshotChildNodes(element) {
+    if (getTagName(element) === 'slot' && typeof element.assignedNodes === 'function') {
+      const assigned = element.assignedNodes({ flatten: true });
+      if (assigned.length) return Array.from(assigned);
+    }
+    if (isOpenShadowRoot(element.shadowRoot)) {
+      return Array.from(element.shadowRoot.childNodes || element.shadowRoot.children || []);
+    }
+    const nodes = Array.from(element.childNodes || []);
+    return nodes.length ? nodes : Array.from(element.children || []);
+  }
+
+  function formatAiSnapshotElement(element, role, accessibility) {
+    const headingLevel = role === 'heading' ? accessibility?.headingLevel : null;
+    const roleLabel = headingLevel ? `heading[${headingLevel}]` : role;
+    const name = clipAiSnapshotText(
+      accessibility?.name?.value || (role === 'interactive' ? element.textContent : '')
+    );
+    const parts = [roleLabel];
+    if (name && role !== 'heading') parts.push(quoteAiSnapshotText(name));
+
+    if (role === 'link') {
+      const href = normalizeText(element.getAttribute?.('href'));
+      if (href) parts.push('->', quoteAiSnapshotText(href));
+    }
+
+    const value = aiSnapshotValue(element, role);
+    if (value) parts.push(`value=${value}`);
+    else if (['textbox', 'searchbox'].includes(role)) {
+      const placeholder = normalizeText(element.getAttribute?.('placeholder'));
+      if (placeholder && placeholder !== name) parts.push(`placeholder=${quoteAiSnapshotText(placeholder)}`);
+    }
+
+    parts.push(...aiSnapshotStateTokens(accessibility));
+    return parts.join(' ');
+  }
+
+  function buildAiSnapshot(element) {
+    if (!isDomElement(element)) throw new Error('対象要素を取得できません');
+    const lines = [];
+    let visited = 0;
+    let truncated = false;
+
+    const addText = (text, indent) => {
+      const normalized = normalizeText(text);
+      if (normalized) lines.push(`${'  '.repeat(indent)}text ${quoteAiSnapshotText(normalized)}`);
+    };
+
+    const visitElement = (current, indent, depth) => {
+      if (!isDomElement(current) || truncated || !isAiSnapshotVisible(current)) return;
+      if (visited >= MAX_AI_SNAPSHOT_ELEMENTS || depth > MAX_AI_SNAPSHOT_DEPTH) {
+        truncated = true;
+        return;
+      }
+      visited += 1;
+
+      const accessibility = collectAccessibility(current);
+      const role = aiSnapshotRole(current, accessibility);
+      const atomic = AI_SNAPSHOT_ATOMIC_ROLES.has(role);
+      const semantic = Boolean(role);
+      if (semantic) lines.push(`${'  '.repeat(indent)}${formatAiSnapshotElement(current, role, accessibility)}`);
+      if (atomic) return;
+
+      const childIndent = semantic ? indent + 1 : indent;
+      const childNodes = aiSnapshotChildNodes(current);
+      if (!childNodes.length) {
+        addText(current.textContent, childIndent);
+        return;
+      }
+
+      for (const child of childNodes) {
+        if (child?.nodeType === 3) addText(child.textContent, childIndent);
+        else if (isDomElement(child)) visitElement(child, childIndent, depth + 1);
+        if (truncated) break;
+      }
+    };
+
+    visitElement(element, 0, 0);
+    let snapshot = lines.join('\n');
+    if (!snapshot) snapshot = '(no visible semantic content)';
+    if (truncated) snapshot += '\n… [truncated]';
+    if (snapshot.length > MAX_AI_SNAPSHOT_LENGTH) {
+      snapshot = `${snapshot.slice(0, MAX_AI_SNAPSHOT_LENGTH - 16).trimEnd()}\n… [truncated]`;
+    }
+    return snapshot;
   }
 
   function previewHandler(value) {
@@ -1049,6 +1239,7 @@
     collectComputedStyles,
     collectBoxModel,
     collectAccessibility,
+    buildAiSnapshot,
     collectEventInfo,
     createShallowOuterHTML,
     inspectElementDetail,

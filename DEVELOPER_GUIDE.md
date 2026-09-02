@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.15.3`
+`0.16.0`
 
 ## 構成
 
@@ -67,6 +67,7 @@ inspector.js
 ├─ open Shadow DOM context
 ├─ computed styles / box model
 ├─ accessibility estimation
+├─ AI semantic snapshot
 ├─ limited DOM0 / inline event collection
 └─ hierarchy metadata
 ```
@@ -128,7 +129,7 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 ### トップフレーム専用責務
 
 - Inspectorウィンドウ生成
-- Overview / Styles / Edit / A11y / Locators / Compare / JSONタブ
+- Overview / Styles / Edit / A11y / Locators / Compare / AI / JSONタブ
 - ARIA tab / tabpanel契約とロービングtabindex、左右矢印・Home・Endによるキーボード移動
 - 固定Hierarchy領域
 - 子要素listboxのhover / focusプレビューとキャンセル時のhighlight復帰
@@ -137,8 +138,9 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 - パネル横幅・高さ・斜めリサイズ
 - 通常時の最小360×440pxと、極小ビューポート時の利用可能領域への縮小
 - 遅延固定カウント
-- 遅延固定直後の選択のみ / Standard JSONコピー・保存 / CSS Selectorコピー
+- 遅延固定直後の選択のみ / Standard JSONコピー・保存 / CSS Selectorコピー / AI Snapshotコピー
 - Locator単体コピー
+- AI Snapshotコピー
 - JSONコピー・保存
 - 編集CSSコピー
 - ヘッダドラッグ
@@ -153,7 +155,7 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 
 固定要素の切断、子frameの`pagehide`、選択frameの新しい`FRAME_READY`を`selectionInvalidated`へ統一します。Backgroundはframe IDとselection IDの両方が現在値と一致する場合だけ選択状態を解除し、全フレームへ`START_PICKING`をbroadcastします。トップframe再読み込み時も古い選択ルーティングを破棄します。
 
-遅延固定の`FIX_HOVER`で生成する`selected`イベントだけに`delayed: true`を付与します。トップフレームはそのイベントを受信した直後、`遅延固定後`プルダウンの現在値に応じて、すでに取得済みのStandard結果をコピー・保存します。通常クリック、履歴復元、Hierarchy移動、再解析では自動処理しません。追加のChrome権限やStorageは使用しません。
+遅延固定の`FIX_HOVER`で生成する`selected`イベントだけに`delayed: true`を付与します。トップフレームはそのイベントを受信した直後、`遅延固定後`プルダウンの現在値に応じて、すでに取得済みのStandard結果、CSS Selector、またはAI Snapshotをコピー・保存します。通常クリック、履歴復元、Hierarchy移動、再解析では自動処理しません。追加のChrome権限やStorageは使用しません。
 
 Stylesの長いComputed Style値はカード内で折り返し、外側の`.view-scroll`は縦スクロールだけを担当します。LocatorやJSONのコード表示は各`.code-box`自身が必要なスクロールを保持します。
 
@@ -174,8 +176,19 @@ collectShadowContext(element)
 collectComputedStyles(element)
 collectBoxModel(element)
 collectAccessibility(element)
+buildAiSnapshot(element)
 collectEventInfo(element)
 ```
+
+### AI Snapshot
+
+`ElementInspector.buildAiSnapshot()`は選択要素をrootとして同期的にsubtreeを走査し、AIが画面内容と操作可能性を判断するためのsemantic text treeを生成します。Standard JSONの`result`には追加せず、`inspectAndSelect()`が`selected`イベントの`aiSnapshot`フィールドとして別送し、トップフレームのUI stateで独立して保持します。
+
+出力はallowlist方式です。表示テキスト、role、accessible name、見出しレベル、リンク先、フォーム値、checked / selected / expanded / disabled等の主要stateだけを構成し、`class`、`style`、`data-*`など元DOM属性をコピーしません。roleを持たないwrapperは出力せず子へcollapseします。password値は`[hidden]`へ置換します。
+
+`hidden`、`aria-hidden="true"`、`display:none`、`visibility:hidden / collapse`、`opacity:0`はsubtreeごと除外します。open Shadow RootではShadow treeを走査し、slotは取得可能なら`assignedNodes({ flatten: true })`を使用します。closed Shadow Root、CSS generated content、canvasのpixel内容、cross-origin iframe内部は対象外です。
+
+暴走防止として最大500要素、DOM深度40、出力16,000文字で打ち切り、末尾へ`… [truncated]`を付けます。各text/name/valueは320文字へ制限します。
 
 返却形式：
 

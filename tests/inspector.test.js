@@ -14,6 +14,7 @@ class MockElement {
     this.attributeMap = { ...attributes };
     this.parentElement = null;
     this.children = [];
+    this.childNodes = [];
     this.textContent = options.textContent || '';
     this.outerHTML = options.outerHTML || `<${String(tagName).toLowerCase()}></${String(tagName).toLowerCase()}>`;
     this.rect = options.rect || { top: 0, left: 0, width: 0, height: 0 };
@@ -45,7 +46,15 @@ class MockElement {
     child.parentElement = this;
     child.ownerDocument = this.ownerDocument;
     this.children.push(child);
+    this.childNodes.push(child);
     return child;
+  }
+
+  appendText(text) {
+    const node = { nodeType: 3, textContent: String(text) };
+    this.childNodes.push(node);
+    this.textContent += String(text);
+    return node;
   }
 
   get firstElementChild() {
@@ -621,6 +630,71 @@ test('reports sibling position and selectable children', () => {
   assert.equal(first.nextElementSibling, second);
 });
 
+test('builds a minimal AI snapshot from visible semantic content and actions', () => {
+  const root = new MockElement('div', {
+    class: 'css-123 flex gap-2',
+    style: 'padding: 12px',
+    'data-testid': 'account-panel'
+  });
+  const heading = root.appendChild(new MockElement('h2'));
+  heading.appendText('Account settings');
+
+  const wrapper = root.appendChild(new MockElement('div', {
+    class: 'generated-wrapper',
+    'data-state': 'open'
+  }));
+  const link = wrapper.appendChild(new MockElement('a', { href: '/profile', class: 'link-abc' }));
+  link.appendText('Profile');
+  wrapper.appendChild(new MockElement('button', {
+    'aria-label': 'Open menu',
+    class: 'icon-button',
+    'data-radix-collection-item': ''
+  }));
+
+  const checkbox = root.appendChild(new MockElement('input', {
+    type: 'checkbox',
+    'aria-label': 'Notifications'
+  }));
+  checkbox.checked = true;
+
+  const password = root.appendChild(new MockElement('input', {
+    type: 'password',
+    'aria-label': 'Password'
+  }));
+  password.value = 'super-secret';
+
+  const note = root.appendChild(new MockElement('span', { class: 'muted' }));
+  note.appendText('Visible note');
+
+  const customAction = root.appendChild(new MockElement('div', { onclick: 'openPanel()' }));
+  customAction.appendText('Custom action');
+
+  const hidden = root.appendChild(new MockElement('div', { class: 'hidden' }, {
+    computedStyle: { display: 'none', visibility: 'visible', position: 'static' }
+  }));
+  hidden.appendText('Do not expose this');
+
+  const transparent = root.appendChild(new MockElement('div', {}, {
+    computedStyle: { display: 'block', visibility: 'visible', opacity: '0', position: 'static' }
+  }));
+  transparent.appendText('Also invisible');
+
+  const snapshot = inspector.buildAiSnapshot(root);
+
+  assert.equal(snapshot, [
+    'heading[2]',
+    '  text "Account settings"',
+    'link "Profile" -> "/profile"',
+    'button "Open menu"',
+    'checkbox "Notifications" checked',
+    'textbox "Password" value=[hidden]',
+    'text "Visible note"',
+    'interactive "Custom action"'
+  ].join('\n'));
+  assert.doesNotMatch(snapshot, /css-123|generated-wrapper|data-testid|data-state|style=/);
+  assert.doesNotMatch(snapshot, /super-secret|Do not expose this|Also invisible/);
+});
+
 test('manifest and static release contracts are aligned', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -635,10 +709,10 @@ test('manifest and static release contracts are aligned', () => {
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.15.3');
+  assert.equal(manifest.version, '0.16.0');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.15.3');
+  assert.equal(pkg.version, '0.16.0');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -691,12 +765,14 @@ test('manifest and static release contracts are aligned', () => {
   assert.match(content, /data-tab="styles"/);
   assert.match(content, /data-tab="edit"/);
   assert.match(content, /data-tab="a11y"/);
+  assert.match(content, /data-tab="ai"/);
   assert.match(content, /data-tab="compare"/);
   assert.match(content, /role="tab" id="ei-tab-overview"[^>]*aria-controls="ei-panel-overview"[^>]*aria-selected="true"[^>]*tabindex="0"/);
   assert.match(content, /role="tablist"[^>]*aria-orientation="horizontal"/);
   assert.match(content, /role="tab" id="ei-tab-styles"[^>]*aria-controls="ei-panel-styles"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
   assert.match(content, /role="tabpanel" id="ei-panel-overview"[^>]*aria-labelledby="ei-tab-overview"/);
   assert.match(content, /role="tabpanel" id="ei-panel-json"[^>]*aria-labelledby="ei-tab-json"[^>]*hidden/);
+  assert.match(content, /role="tabpanel" id="ei-panel-ai"[^>]*aria-labelledby="ei-tab-ai"[^>]*hidden/);
   assert.match(content, /button\.addEventListener\('keydown', handleTabKeyDown\)/);
   assert.match(content, /MAX_PINNED_ENTRIES = 4/);
   assert.match(content, /data-action="clear-pins"/);
@@ -724,6 +800,10 @@ test('manifest and static release contracts are aligned', () => {
   assert.match(content, /value="copy-json"[^>]*>JSONコピー/);
   assert.match(content, /value="save-json"[^>]*>JSON保存/);
   assert.match(content, /value="copy-css"[^>]*>CSS Selectorコピー/);
+  assert.match(content, /value="copy-ai-snapshot"[^>]*>AI Snapshotコピー/);
+  assert.match(content, /data-action="copy-ai-snapshot"/);
+  assert.match(content, /AI Snapshot/);
+  assert.match(inspectorSource, /function buildAiSnapshot\(/);
   assert.match(content, /\.view-scroll \{[^}]*overflow-y: auto;[^}]*overflow-x: hidden;/s);
   assert.match(content, /\.style-property-value \{[^}]*display: block;[^}]*white-space: normal;[^}]*overflow-wrap: anywhere;/s);
   assert.doesNotMatch(content, /density-control|density-option|data-density(?:-option)?|function setDensity|ui\.density/);

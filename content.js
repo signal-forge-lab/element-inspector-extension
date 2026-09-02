@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.15.3';
+  const EXTENSION_VERSION = '0.16.0';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -163,6 +163,9 @@
     jsonCopyButton: null,
     jsonSaveButton: null,
     jsonPreview: null,
+    aiCopyButton: null,
+    aiPreview: null,
+    aiSnapshot: '',
     result: null,
     activeFrameId: null,
     selectedFrameId: null,
@@ -883,6 +886,11 @@
       return;
     }
 
+    let aiSnapshot = '';
+    try {
+      aiSnapshot = globalThis.ElementInspector?.buildAiSnapshot?.(element) || '';
+    } catch {}
+
     frameState.mode = 'fixed';
     frameState.hoveredElement = element;
     frameState.selectedElement = element;
@@ -899,6 +907,7 @@
       selectionId,
       historyMode: options.historyMode || 'push',
       statusMessage: options.statusMessage || null,
+      aiSnapshot,
       result
     });
   }
@@ -1651,6 +1660,7 @@
       setLocatorView(ui.xpathValue, ui.xpathBadge, null, false);
       setLocatorView(ui.jsPathValue, ui.jsPathBadge, null, false);
       renderJsonView();
+      renderAiSnapshotView();
       renderStylesView(null);
       renderEditView(null);
       renderAccessibilityView(null);
@@ -1680,6 +1690,7 @@
     setLocatorView(ui.xpathValue, ui.xpathBadge, result.locators?.xpath, frameRelative);
     setLocatorView(ui.jsPathValue, ui.jsPathBadge, result.locators?.jsPath, frameRelative);
     renderJsonView();
+    renderAiSnapshotView();
     renderStylesView(result);
     renderEditView(result);
     renderAccessibilityView(result);
@@ -1841,6 +1852,7 @@
 
   function clearTopSelectionState() {
     ui.result = null;
+    ui.aiSnapshot = '';
     ui.activeFrameId = null;
     ui.selectedFrameId = null;
     ui.currentSelectionId = null;
@@ -2021,6 +2033,13 @@
     ui.jsonPreview.textContent = JSON.stringify(payload, null, 2);
   }
 
+  function renderAiSnapshotView() {
+    if (!ui.aiPreview || !ui.aiCopyButton) return;
+    const snapshot = typeof ui.aiSnapshot === 'string' ? ui.aiSnapshot : '';
+    ui.aiCopyButton.disabled = !snapshot;
+    ui.aiPreview.textContent = snapshot || '固定した要素のAI Snapshotがここに表示されます。';
+  }
+
   function requestAncestorExport() {
     if (!ui.result || !ui.currentSelectionId || ui.ancestorExportPending) return;
     ui.ancestorExport = null;
@@ -2055,6 +2074,16 @@
     }
   }
 
+  async function copyAiSnapshot() {
+    if (!ui.aiSnapshot) return;
+    try {
+      await copyText(ui.aiSnapshot);
+      setUIStatus('AI Snapshotをコピーしました。', 'success');
+    } catch (error) {
+      setUIStatus(error instanceof Error ? error.message : String(error), 'error');
+    }
+  }
+
   function downloadJson() {
     const payload = currentJsonPayload();
     if (!payload) return;
@@ -2084,7 +2113,7 @@
     setUIStatus(`${filename}を保存しました。`, 'success');
   }
 
-  async function runDelayedSelectionAction(action, result) {
+  async function runDelayedSelectionAction(action, result, aiSnapshot = '') {
     if (!result || action === 'selection-only') return;
     try {
       if (action === 'copy-json') {
@@ -2101,6 +2130,12 @@
         if (!value) throw new Error('CSS Selectorを生成できませんでした。');
         await copyText(value);
         setUIStatus('遅延固定した要素のCSS Selectorをコピーしました。', 'success');
+        return;
+      }
+      if (action === 'copy-ai-snapshot') {
+        if (!aiSnapshot) throw new Error('AI Snapshotを生成できませんでした。');
+        await copyText(aiSnapshot);
+        setUIStatus('遅延固定した要素のAI Snapshotをコピーしました。', 'success');
       }
     } catch (error) {
       setUIStatus(error instanceof Error ? error.message : String(error), 'error');
@@ -2156,6 +2191,7 @@
       }
       ui.pendingHistoryIndex = null;
       ui.result = event.result;
+      ui.aiSnapshot = typeof event.aiSnapshot === 'string' ? event.aiSnapshot : '';
       ui.activeFrameId = event.frameId;
       ui.selectedFrameId = event.frameId;
       ui.currentSelectionId = event.selectionId || null;
@@ -2166,7 +2202,7 @@
       renderUI();
       if (ui.jsonProfile === 'ancestor-detail') requestAncestorExport();
       if (delayedAction !== 'selection-only') {
-        void runDelayedSelectionAction(delayedAction, event.result);
+        void runDelayedSelectionAction(delayedAction, event.result, ui.aiSnapshot);
       }
       return;
     }
@@ -2778,6 +2814,8 @@
       .json-scope-item code { display: block; margin-top: 3px; overflow: hidden; color: #29313a; text-overflow: ellipsis; white-space: nowrap; font: 9px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace; }
       .json-toolbar { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 8px; }
       .json-preview { max-height: 380px; }
+      .ai-note { margin: 0 0 8px; color: var(--ei-muted); font-size: 8.5px; line-height: 1.45; }
+      .ai-snapshot-preview { max-height: 430px; }
       .compare-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
       .compare-note { color: var(--ei-muted); font-size: 9px; }
       .compare-grid { display: grid; grid-template-columns: 1fr; gap: 8px; }
@@ -2958,6 +2996,7 @@
                 <option value="copy-json">JSONコピー</option>
                 <option value="save-json">JSON保存</option>
                 <option value="copy-css">CSS Selectorコピー</option>
+                <option value="copy-ai-snapshot">AI Snapshotコピー</option>
               </select>
             </label>
           </section>
@@ -3006,6 +3045,7 @@
           <button type="button" role="tab" id="ei-tab-a11y" aria-controls="ei-panel-a11y" aria-selected="false" tabindex="-1" data-tab="a11y" data-active="false">A11y</button>
           <button type="button" role="tab" id="ei-tab-locators" aria-controls="ei-panel-locators" aria-selected="false" tabindex="-1" data-tab="locators" data-active="false">Locators</button>
           <button type="button" role="tab" id="ei-tab-compare" aria-controls="ei-panel-compare" aria-selected="false" tabindex="-1" data-tab="compare" data-active="false" hidden>Compare</button>
+          <button type="button" role="tab" id="ei-tab-ai" aria-controls="ei-panel-ai" aria-selected="false" tabindex="-1" data-tab="ai" data-active="false">AI</button>
           <button type="button" role="tab" id="ei-tab-json" aria-controls="ei-panel-json" aria-selected="false" tabindex="-1" data-tab="json" data-active="false">JSON</button>
         </nav>
 
@@ -3207,6 +3247,17 @@
             </section>
           </div>
 
+          <div class="tab-panel" role="tabpanel" id="ei-panel-ai" aria-labelledby="ei-tab-ai" data-panel="ai" hidden>
+            <section>
+              <div class="section-head">
+                <h2 class="section-title">AI Snapshot</h2>
+                <button type="button" data-action="copy-ai-snapshot">AI Snapshotをコピー</button>
+              </div>
+              <p class="ai-note">表示テキスト、意味のある構造、操作可能要素と状態だけを残したAI向けの最小DOM表現です。</p>
+              <pre class="code-box ai-snapshot-preview">固定した要素のAI Snapshotがここに表示されます。</pre>
+            </section>
+          </div>
+
           <div class="tab-panel" role="tabpanel" id="ei-panel-json" aria-labelledby="ei-tab-json" data-panel="json" hidden>
             <section>
               <div class="json-profile-card">
@@ -3334,6 +3385,8 @@
     ui.jsonCopyButton = panel.querySelector('[data-action="copy-json"]');
     ui.jsonSaveButton = panel.querySelector('[data-action="save-json"]');
     ui.jsonPreview = panel.querySelector('.json-preview');
+    ui.aiCopyButton = panel.querySelector('[data-action="copy-ai-snapshot"]');
+    ui.aiPreview = panel.querySelector('.ai-snapshot-preview');
 
     ui.header.addEventListener('pointerdown', beginPanelDrag);
     ui.header.addEventListener('pointermove', movePanel);
@@ -3372,6 +3425,7 @@
     }
     ui.jsonCopyButton.addEventListener('click', copyJson);
     ui.jsonSaveButton.addEventListener('click', downloadJson);
+    ui.aiCopyButton.addEventListener('click', copyAiSnapshot);
     for (const button of ui.tabButtons) {
       button.addEventListener('click', () => setActiveTab(button.dataset.tab));
       button.addEventListener('keydown', handleTabKeyDown);
@@ -3508,6 +3562,7 @@
     ui.jsonProfile = 'standard';
     ui.ancestorExport = null;
     ui.ancestorExportPending = false;
+    ui.aiSnapshot = '';
   }
 
   function setActive(active) {

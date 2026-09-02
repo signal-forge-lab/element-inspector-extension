@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Prismora — Web Element Inspector",
-  "version": "0.15.3",
-  "description": "Web Element Inspector for DOM structure, styles, accessibility, temporary CSS edits, locators, and JSON export.",
+  "version": "0.16.0",
+  "description": "Web Element Inspector for DOM structure, styles, accessibility, AI snapshots, temporary CSS edits, locators, and JSON export.",
   "icons": {
     "16": "assets/icons/main-icon-16.png",
     "32": "assets/icons/main-icon-32.png",

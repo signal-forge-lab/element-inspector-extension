@@ -190,6 +190,9 @@ function createContentHarness(options = {}) {
           }
         };
       },
+      buildAiSnapshot() {
+        return options.aiSnapshot || 'button "Default snapshot"';
+      },
       getNavigableChildren() {
         return options.navigableChildren || [];
       }
@@ -214,7 +217,7 @@ function createContentHarness(options = {}) {
   };
 }
 
-test('delayed selection actions copy Standard JSON or CSS without another panel interaction', async () => {
+test('delayed selection actions copy Standard JSON, CSS, or AI Snapshot without another panel interaction', async () => {
   const harness = createContentHarness();
   assert.equal(typeof harness.api.runDelayedSelectionAction, 'function');
   const result = {
@@ -234,6 +237,23 @@ test('delayed selection actions copy Standard JSON or CSS without another panel 
 
   await harness.api.runDelayedSelectionAction('copy-css', result);
   assert.equal(harness.clipboardWrites[1], '#transient-item');
+
+  await harness.api.runDelayedSelectionAction('copy-ai-snapshot', result, 'button "Transient menu item"');
+  assert.equal(harness.clipboardWrites[2], 'button "Transient menu item"');
+});
+
+test('keeps AI Snapshot separate from the Standard JSON result when selecting', () => {
+  const harness = createContentHarness({ aiSnapshot: 'button "Save"' });
+  const element = new FakeElement({ connected: true });
+
+  harness.api.inspectAndSelect(element, 'test');
+
+  const selectedMessage = harness.runtimeMessages.find(message =>
+    message.type === MESSAGE.FRAME_EVENT && message.event?.kind === 'selected'
+  );
+  assert.ok(selectedMessage);
+  assert.equal(selectedMessage.event.aiSnapshot, 'button "Save"');
+  assert.equal(Object.prototype.hasOwnProperty.call(selectedMessage.event.result, 'aiSnapshot'), false);
 });
 
 test('previews a child without changing selection and restores the original highlight on cancel', () => {

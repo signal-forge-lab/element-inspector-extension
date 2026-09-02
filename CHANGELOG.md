@@ -2,6 +2,15 @@
 
 Prismoraの主な変更を記録します。
 
+## [0.16.0] - 2026-09-02
+
+### Added
+
+- 選択要素のsubtreeから、表示テキスト、semantic role、accessible name、操作可能要素、リンク先、フォーム値、主要stateだけを抽出する`AI Snapshot`を追加しました。
+- `class`、`style`、`data-*`など実装上のノイズを出力せず、意味のないwrapperはcollapseします。hidden要素と`opacity: 0`要素は除外し、passwordの実値は出力しません。
+- `AI`タブからSnapshotを確認・コピーでき、`遅延固定後`から`AI Snapshotコピー`を選べるようにしました。
+- AI SnapshotはStandard JSONへ混在させず、選択イベントの独立フィールドとして固定時点で生成します。
+
 ## [0.15.3] - 2026-08-27
 
 ### Fixed

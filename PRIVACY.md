@@ -1,6 +1,6 @@
 # Prismora Privacy Policy
 
-最終更新日: 2026-08-07
+最終更新日: 2026-09-02
 
 ## 1. 対象
 
@@ -32,6 +32,7 @@ Prismoraは機能提供のため、起動中のページと対応iframe内にあ
 - 一時CSS編集、Undo、Reset
 - 選択履歴とピン留め比較
 - Standard JSONとAncestor detail JSONの生成
+- AI Snapshotの生成
 - ユーザー操作によるクリップボードへのコピーとJSONファイル保存
 
 広告、ユーザー追跡、行動分析、プロファイリング、信用評価には使用しません。
@@ -76,7 +77,7 @@ Prismoraは、DOM解析結果、履歴、ピン留め、一時編集、パネル
 
 ## 7. Chrome権限
 
-Prismoraが宣言する拡張機能権限は`clipboardWrite`です。これは、ユーザーがコピー操作を実行したときにLocator、CSS、JSONをクリップボードへ書き込むために使用します。
+Prismoraが宣言する拡張機能権限は`clipboardWrite`です。これは、ユーザーがコピー操作を実行したときにLocator、CSS、JSON、AI Snapshotをクリップボードへ書き込むために使用します。
 
 Content Scriptは`<all_urls>`および`all_frames`へ設定されています。これは、ユーザーがツールバーからPrismoraを起動したページとiframe内の要素を選択・解析するためです。Prismoraが非アクティブな間は、要素選択・解析・frame context handshakeを実行しません。
 
@@ -92,7 +93,7 @@ Prismoraはユーザーデータを販売、貸与、広告目的で利用、ま
 
 Prismoraはローカル完結を基本設計とし、ページ内容を外部へ送信しないことでデータ露出を抑えます。
 
-ただし、コピーしたJSON、Locator、CSSにはページ内容、URL、属性、内部IDなどが含まれる可能性があります。第三者へ共有する前に、ユーザー自身で内容を確認してください。
+ただし、コピーしたJSON、Locator、CSS、AI Snapshotにはページ内容、URL、入力値、内部IDなどが含まれる可能性があります。AI Snapshotではpassword inputの実値は出力しませんが、その他の表示テキストやフォーム値は含まれる場合があります。第三者へ共有する前に、ユーザー自身で内容を確認してください。
 
 ## 10. 変更
 

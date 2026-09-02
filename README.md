@@ -1,6 +1,6 @@
 # Prismora — Web Element Inspector
 
-Chromeのツールバーから起動し、ページ上のDOM要素を視覚的に選択して、Locator・階層・Styles・Accessibility・一時CSS編集・DOMスナップショットを確認、コピー、保存するChrome拡張です。
+Chromeのツールバーから起動し、ページ上のDOM要素を視覚的に選択して、Locator・階層・Styles・Accessibility・AI Snapshot・一時CSS編集・DOMスナップショットを確認、コピー、保存するChrome拡張です。
 
 ## 名称とブランドコンセプト
 
@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.15.3`
+`0.16.0`
 
 - [変更履歴](CHANGELOG.md)
 - [プライバシーポリシー](PRIVACY.md)
@@ -45,7 +45,7 @@ Manifest V3のService Workerが停止・再起動した場合も、次の操作�
 ↓
 クリックして固定
 ↓
-固定Hierarchy・選択履歴・ピン比較・Overview / Styles / Edit / A11y / Locators / JSONを確認
+固定Hierarchy・選択履歴・ピン比較・Overview / Styles / Edit / A11y / Locators / AI / JSONを確認
 ```
 
 ### 専用ウィンドウ
@@ -61,6 +61,7 @@ Manifest V3のService Workerが停止・再起動した場合も、次の操作�
 - `Edit`でCSS・レイアウトを一時編集します。
 - `A11y`で基本Accessibility情報と限定イベント情報を確認します。
 - `Locators`でCSS Selector、XPath、JS Pathを確認・コピーします。
+- `AI`で選択要素の表示内容と操作可能性だけへ最小化したAI Snapshotを確認・コピーします。
 - `JSON`で全結果をコピーまたはファイル保存します。
 - タブへフォーカス中は左右矢印で前後、`Home`で先頭、`End`で末尾へ移動できます。非表示の`Compare`は移動対象から除外されます。
 - `prefers-reduced-motion`ではパネル出現と虹色アウトラインのアニメーションを停止し、`prefers-reduced-transparency`、`prefers-contrast`にも対応します。
@@ -85,8 +86,29 @@ UIはプロジェクト内の`apple-design`スキルを設計基準として、�
 - `JSONコピー`: 固定時点のStandard JSONをクリップボードへコピーします。
 - `JSON保存`: 固定時点のStandard JSONをファイル保存します。
 - `CSS Selectorコピー`: 固定時点のCSS Selectorをクリップボードへコピーします。
+- `AI Snapshotコピー`: 固定時点のAI Snapshotをクリップボードへコピーします。
 
 この自動処理は遅延固定だけに適用されます。通常クリック、履歴復元、Hierarchy移動では実行しません。hover解除で消えるUIでは、Prismoraのパネルへポインターを戻す前に情報を回収する用途に使えます。
+
+### AI Snapshot
+
+AI Snapshotは、生HTMLから属性を削るのではなく、選択要素のsubtreeからAIが画面内容と操作可能性を判断するために必要な情報だけを新しく生成します。
+
+```text
+dialog "Account settings"
+  heading[2] "Profile"
+  textbox "Display name" value="Shogo"
+  checkbox "Public profile" checked
+  link "Privacy policy" -> "/privacy"
+  button "Cancel"
+  button "Save"
+```
+
+主に残す情報は、表示テキスト、semantic role、accessible name、見出しレベル、リンク先、入力中の値、checked / selected / expanded / disabledなどの主要stateです。`class`、`style`、`data-*`、生成ID、SVG pathなどの実装ノイズは出力せず、意味を持たないwrapperはcollapseします。
+
+`hidden`、`aria-hidden="true"`、`display:none`、`visibility:hidden / collapse`、`opacity:0`のsubtreeは除外します。password inputは値を`[hidden]`として扱います。open Shadow Rootは解析対象にできますが、closed Shadow Root、CSS生成content、canvasの描画内容、cross-origin iframe内部などDOMから取得できない視覚情報は含みません。
+
+AI SnapshotはStandard JSONへ追加せず独立して保持します。遅延固定時も要素を固定した瞬間に同期生成するため、その直後にhover UIが消えても`AI Snapshotコピー`には固定時点の内容を使用します。
 
 ### 強調表示
 
@@ -111,7 +133,7 @@ UIはプロジェクト内の`apple-design`スキルを設計基準として、�
 
 ウィンドウには兄弟内の現在位置と子要素数を表示します。移動するたびにDOM解析とLocator生成を再実行します。
 
-Hierarchyは`Overview`、`Styles`、`Edit`、`A11y`、`Locators`、`Compare`、`JSON`のどのビューでも利用できます。open Shadow Root直下の要素では、親移動がShadow Hostへ接続され、Shadow子とLight DOM子が混在する場合だけ子一覧へ種別を表示します。
+Hierarchyは`Overview`、`Styles`、`Edit`、`A11y`、`Locators`、`Compare`、`AI`、`JSON`のどのビューでも利用できます。open Shadow Root直下の要素では、親移動がShadow Hostへ接続され、Shadow子とLight DOM子が混在する場合だけ子一覧へ種別を表示します。
 
 ## 選択履歴
 
