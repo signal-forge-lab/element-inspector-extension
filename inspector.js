@@ -9,10 +9,39 @@
   const MAX_CHILD_SUMMARIES = 80;
   const MAX_EVENT_HANDLER_PREVIEW = 320;
   const MAX_CUSTOM_PROPERTIES = 200;
-  const MAX_AI_SNAPSHOT_ELEMENTS = 500;
-  const MAX_AI_SNAPSHOT_LENGTH = 16000;
-  const MAX_AI_SNAPSHOT_TEXT = 320;
-  const MAX_AI_SNAPSHOT_DEPTH = 40;
+  const AI_SNAPSHOT_PROFILES = Object.freeze({
+    compact: Object.freeze({
+      maxElements: 1000,
+      maxLength: 32000,
+      maxTextLength: 320,
+      maxDepth: 40,
+      compressLists: true
+    }),
+    full: Object.freeze({
+      maxElements: 5000,
+      maxLength: 120000,
+      maxTextLength: 2000,
+      maxDepth: 80,
+      compressLists: false
+    })
+  });
+  const MAX_AI_COMPACT_LIST_ITEMS = 10;
+  const AI_SNAPSHOT_REGION_PRIORITY = Object.freeze({
+    main: 0,
+    dialog: 1,
+    alertdialog: 1,
+    form: 2,
+    banner: 3,
+    complementary: 4,
+    navigation: 5,
+    contentinfo: 6
+  });
+  const AI_SNAPSHOT_LANDMARK_ROLES = new Set(Object.keys(AI_SNAPSHOT_REGION_PRIORITY));
+  const AI_SNAPSHOT_LANDMARK_SELECTOR = [
+    'main', 'dialog', 'form', 'header', 'aside', 'nav', 'footer',
+    '[role="main"]', '[role="dialog"]', '[role="alertdialog"]', '[role="form"]',
+    '[role="banner"]', '[role="complementary"]', '[role="navigation"]', '[role="contentinfo"]'
+  ].join(',');
   const AI_SNAPSHOT_ATOMIC_ROLES = new Set([
     'button', 'link', 'textbox', 'searchbox', 'checkbox', 'radio', 'switch',
     'slider', 'spinbutton', 'combobox', 'option', 'tab', 'treeitem',
@@ -322,7 +351,7 @@
     if (!role && tagName === 'input' && type === 'password') role = 'textbox';
     if (!role && accessibility?.focus?.contentEditable) role = 'textbox';
     if (!role && tagName === 'section' && accessibility?.name?.value) role = 'region';
-    if (!role && tagName === 'form' && accessibility?.name?.value) role = 'form';
+    if (!role && tagName === 'form') role = 'form';
     if (!role && tagName === 'iframe') role = 'iframe';
     if (!role && ['canvas', 'video', 'audio'].includes(tagName)) role = tagName;
     if (
@@ -334,18 +363,18 @@
     return role;
   }
 
-  function clipAiSnapshotText(value) {
+  function clipAiSnapshotText(value, maxLength = AI_SNAPSHOT_PROFILES.compact.maxTextLength) {
     const text = normalizeText(value);
-    return text.length > MAX_AI_SNAPSHOT_TEXT
-      ? `${text.slice(0, MAX_AI_SNAPSHOT_TEXT - 1)}…`
+    return text.length > maxLength
+      ? `${text.slice(0, Math.max(0, maxLength - 1))}…`
       : text;
   }
 
-  function quoteAiSnapshotText(value) {
-    return JSON.stringify(clipAiSnapshotText(value));
+  function quoteAiSnapshotText(value, maxLength) {
+    return JSON.stringify(clipAiSnapshotText(value, maxLength));
   }
 
-  function aiSnapshotValue(element, role) {
+  function aiSnapshotValue(element, role, maxTextLength) {
     const tagName = getTagName(element);
     const type = String(element.getAttribute?.('type') || '').toLowerCase();
     if (tagName === 'input' && type === 'password') return '[hidden]';
@@ -355,7 +384,7 @@
         .map(option => normalizeText(option.textContent))
         .filter(Boolean)
         .join(', ');
-      if (selectedText) return quoteAiSnapshotText(selectedText);
+      if (selectedText) return quoteAiSnapshotText(selectedText, maxTextLength);
     }
     if (
       ['textbox', 'searchbox', 'slider', 'spinbutton', 'combobox'].includes(role) ||
@@ -363,7 +392,7 @@
     ) {
       const value = element.value ?? element.getAttribute?.('value') ?? '';
       const normalized = normalizeText(value);
-      if (normalized) return quoteAiSnapshotText(normalized);
+      if (normalized) return quoteAiSnapshotText(normalized, maxTextLength);
     }
     if (
       role === 'textbox' &&
@@ -371,12 +400,12 @@
       element.getAttribute?.('contenteditable') !== 'false'
     ) {
       const value = normalizeText(element.textContent);
-      if (value) return quoteAiSnapshotText(value);
+      if (value) return quoteAiSnapshotText(value, maxTextLength);
     }
     return '';
   }
 
-  function aiSnapshotStateTokens(accessibility) {
+  function aiSnapshotStateTokens(accessibility, maxTextLength) {
     const states = accessibility?.states || {};
     const tokens = [];
     if (states.disabled) tokens.push('disabled');
@@ -389,7 +418,9 @@
     if (states.pressed === 'true') tokens.push('pressed');
     if (states.pressed === 'false') tokens.push('not-pressed');
     if (states.invalid && states.invalid !== 'false') tokens.push('invalid');
-    if (states.current && states.current !== 'false') tokens.push(`current=${quoteAiSnapshotText(states.current)}`);
+    if (states.current && states.current !== 'false') {
+      tokens.push(`current=${quoteAiSnapshotText(states.current, maxTextLength)}`);
+    }
     if (states.busy === 'true') tokens.push('busy');
     return tokens;
   }
@@ -406,66 +437,162 @@
     return nodes.length ? nodes : Array.from(element.children || []);
   }
 
-  function formatAiSnapshotElement(element, role, accessibility) {
+  function formatAiSnapshotElement(element, role, accessibility, maxTextLength) {
     const headingLevel = role === 'heading' ? accessibility?.headingLevel : null;
     const roleLabel = headingLevel ? `heading[${headingLevel}]` : role;
     const name = clipAiSnapshotText(
-      accessibility?.name?.value || (role === 'interactive' ? element.textContent : '')
+      accessibility?.name?.value || (role === 'interactive' ? element.textContent : ''),
+      maxTextLength
     );
     const parts = [roleLabel];
-    if (name && role !== 'heading') parts.push(quoteAiSnapshotText(name));
+    if (name && role !== 'heading') parts.push(quoteAiSnapshotText(name, maxTextLength));
 
     if (role === 'link') {
       const href = normalizeText(element.getAttribute?.('href'));
-      if (href) parts.push('->', quoteAiSnapshotText(href));
+      if (href) parts.push('->', quoteAiSnapshotText(href, maxTextLength));
     }
 
-    const value = aiSnapshotValue(element, role);
+    const value = aiSnapshotValue(element, role, maxTextLength);
     if (value) parts.push(`value=${value}`);
     else if (['textbox', 'searchbox'].includes(role)) {
       const placeholder = normalizeText(element.getAttribute?.('placeholder'));
-      if (placeholder && placeholder !== name) parts.push(`placeholder=${quoteAiSnapshotText(placeholder)}`);
+      if (placeholder && placeholder !== name) {
+        parts.push(`placeholder=${quoteAiSnapshotText(placeholder, maxTextLength)}`);
+      }
     }
 
-    parts.push(...aiSnapshotStateTokens(accessibility));
+    parts.push(...aiSnapshotStateTokens(accessibility, maxTextLength));
     return parts.join(' ');
   }
 
-  function buildAiSnapshot(element) {
+  function isAiSnapshotInViewport(element) {
+    const rect = element.getBoundingClientRect?.();
+    const view = element.ownerDocument?.defaultView;
+    const width = Number(view?.innerWidth) || Number(element.ownerDocument?.documentElement?.clientWidth) || 0;
+    const height = Number(view?.innerHeight) || Number(element.ownerDocument?.documentElement?.clientHeight) || 0;
+    if (!rect || width <= 0 || height <= 0) return true;
+    const left = Number(rect.left) || 0;
+    const top = Number(rect.top) || 0;
+    const rectWidth = Number(rect.width) || 0;
+    const rectHeight = Number(rect.height) || 0;
+    if (rectWidth === 0 && rectHeight === 0) {
+      return left >= 0 && top >= 0 && left <= width && top <= height;
+    }
+    const right = Number.isFinite(Number(rect.right)) ? Number(rect.right) : left + rectWidth;
+    const bottom = Number.isFinite(Number(rect.bottom)) ? Number(rect.bottom) : top + rectHeight;
+    return right > 0 && bottom > 0 && left < width && top < height;
+  }
+
+  function buildAiSnapshot(element, options = {}) {
     if (!isDomElement(element)) throw new Error('対象要素を取得できません');
+    const profileName = options.profile === 'full' ? 'full' : 'compact';
+    const profile = AI_SNAPSHOT_PROFILES[profileName];
+    const viewportOnly = options.viewportOnly === true;
     const lines = [];
     let visited = 0;
     let truncated = false;
+    const infoCache = new WeakMap();
+    const regionPriorityMap = new WeakMap();
+
+    const getInfo = current => {
+      let info = infoCache.get(current);
+      if (info) return info;
+      const accessibility = collectAccessibility(current);
+      info = { accessibility, role: aiSnapshotRole(current, accessibility) };
+      infoCache.set(current, info);
+      return info;
+    };
+
+    const landmarks = [element, ...Array.from(element.querySelectorAll?.(AI_SNAPSHOT_LANDMARK_SELECTOR) || [])];
+    for (const landmark of landmarks) {
+      if (!isAiSnapshotVisible(landmark)) continue;
+      const priority = AI_SNAPSHOT_REGION_PRIORITY[getInfo(landmark).role];
+      if (!Number.isInteger(priority)) continue;
+      let current = landmark;
+      while (isDomElement(current)) {
+        regionPriorityMap.set(current, Math.min(regionPriorityMap.get(current) ?? 99, priority));
+        if (current === element) break;
+        current = getComposedParent(current);
+      }
+    }
+
+    const orderedChildNodes = (current, role) => {
+      const nodes = aiSnapshotChildNodes(current);
+      if (AI_SNAPSHOT_LANDMARK_ROLES.has(role) || nodes.length < 2) return nodes;
+      return nodes
+        .map((node, index) => ({
+          node,
+          index,
+          priority: isDomElement(node) ? regionPriorityMap.get(node) ?? 99 : 99
+        }))
+        .sort((left, right) => left.priority - right.priority || left.index - right.index)
+        .map(item => item.node);
+    };
+
+    const childPlan = (current, role) => {
+      const nodes = orderedChildNodes(current, role);
+      if (!profile.compressLists || role !== 'list') return nodes;
+      const listItems = nodes.filter(node =>
+        isDomElement(node) && isAiSnapshotVisible(node) && getInfo(node).role === 'listitem'
+      );
+      if (listItems.length <= MAX_AI_COMPACT_LIST_ITEMS) return nodes;
+      const keep = new Set([...listItems.slice(0, 8), ...listItems.slice(-2)]);
+      const omitted = listItems.length - keep.size;
+      let summaryAdded = false;
+      const planned = [];
+      for (const node of nodes) {
+        const isOmittedListItem = isDomElement(node) &&
+          getInfo(node).role === 'listitem' &&
+          !keep.has(node);
+        if (!isOmittedListItem) {
+          planned.push(node);
+          continue;
+        }
+        if (!summaryAdded) {
+          planned.push({ aiSnapshotSummary: `… ${omitted} more items` });
+          summaryAdded = true;
+        }
+      }
+      return planned;
+    };
 
     const addText = (text, indent) => {
-      const normalized = normalizeText(text);
-      if (normalized) lines.push(`${'  '.repeat(indent)}text ${quoteAiSnapshotText(normalized)}`);
+      const normalized = clipAiSnapshotText(text, profile.maxTextLength);
+      if (normalized) {
+        lines.push(`${'  '.repeat(indent)}text ${quoteAiSnapshotText(normalized, profile.maxTextLength)}`);
+      }
     };
 
     const visitElement = (current, indent, depth) => {
       if (!isDomElement(current) || truncated || !isAiSnapshotVisible(current)) return;
-      if (visited >= MAX_AI_SNAPSHOT_ELEMENTS || depth > MAX_AI_SNAPSHOT_DEPTH) {
+      if (visited >= profile.maxElements || depth > profile.maxDepth) {
         truncated = true;
         return;
       }
       visited += 1;
 
-      const accessibility = collectAccessibility(current);
-      const role = aiSnapshotRole(current, accessibility);
+      const { accessibility, role } = getInfo(current);
+      const inViewport = !viewportOnly || isAiSnapshotInViewport(current);
       const atomic = AI_SNAPSHOT_ATOMIC_ROLES.has(role);
       const semantic = Boolean(role);
-      if (semantic) lines.push(`${'  '.repeat(indent)}${formatAiSnapshotElement(current, role, accessibility)}`);
+      if (semantic && inViewport) {
+        lines.push(`${'  '.repeat(indent)}${formatAiSnapshotElement(current, role, accessibility, profile.maxTextLength)}`);
+      }
       if (atomic) return;
 
-      const childIndent = semantic ? indent + 1 : indent;
-      const childNodes = aiSnapshotChildNodes(current);
+      const childIndent = semantic && inViewport ? indent + 1 : indent;
+      const childNodes = childPlan(current, role);
       if (!childNodes.length) {
-        addText(current.textContent, childIndent);
+        if (inViewport) addText(current.textContent, childIndent);
         return;
       }
 
       for (const child of childNodes) {
-        if (child?.nodeType === 3) addText(child.textContent, childIndent);
+        if (child?.aiSnapshotSummary) {
+          lines.push(`${'  '.repeat(childIndent)}${child.aiSnapshotSummary}`);
+        } else if (child?.nodeType === 3) {
+          if (inViewport) addText(child.textContent, childIndent);
+        }
         else if (isDomElement(child)) visitElement(child, childIndent, depth + 1);
         if (truncated) break;
       }
@@ -475,8 +602,8 @@
     let snapshot = lines.join('\n');
     if (!snapshot) snapshot = '(no visible semantic content)';
     if (truncated) snapshot += '\n… [truncated]';
-    if (snapshot.length > MAX_AI_SNAPSHOT_LENGTH) {
-      snapshot = `${snapshot.slice(0, MAX_AI_SNAPSHOT_LENGTH - 16).trimEnd()}\n… [truncated]`;
+    if (snapshot.length > profile.maxLength) {
+      snapshot = `${snapshot.slice(0, profile.maxLength - 16).trimEnd()}\n… [truncated]`;
     }
     return snapshot;
   }

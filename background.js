@@ -339,6 +339,33 @@
         return true;
       }
 
+      if (command === 'REQUEST_AI_SNAPSHOT') {
+        if (!Number.isInteger(state.selectedFrameId) || typeof message.selectionId !== 'string') {
+          sendResponse({ ok: false, error: 'invalid AI snapshot target' });
+          return false;
+        }
+        sendToFrame(tabId, state.selectedFrameId, {
+          type: MESSAGE.FRAME_COMMAND,
+          command,
+          selectionId: message.selectionId,
+          profile: message.profile === 'full' ? 'full' : 'compact',
+          scope: ['selected', 'viewport', 'page'].includes(message.scope) ? message.scope : 'selected'
+        }, (_response, error) => {
+          if (error) {
+            sendTopEvent(tabId, {
+              kind: 'status',
+              status: 'error',
+              aiSnapshotFailed: true,
+              message: 'AI Snapshotを取得するフレームへ接続できませんでした。'
+            });
+            sendResponse({ ok: false, error });
+            return;
+          }
+          sendResponse({ ok: true });
+        });
+        return true;
+      }
+
       if (command === 'RESTORE_SELECTION') {
         if (!Number.isInteger(message.targetFrameId) || typeof message.selectionId !== 'string') {
           sendResponse({ ok: false, error: 'invalid history target' });

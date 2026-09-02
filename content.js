@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const EXTENSION_VERSION = '0.16.0';
+  const EXTENSION_VERSION = '0.17.0';
   const ROOT_ATTRIBUTE = 'data-element-inspector-ui';
   const FRAME_CHANNEL = '__element_inspector_frame_context_v1__';
   const DEFAULT_DELAY_SECONDS = 5;
@@ -165,7 +165,10 @@
     jsonPreview: null,
     aiCopyButton: null,
     aiPreview: null,
+    aiProfileSelect: null,
+    aiScopeSelect: null,
     aiSnapshot: '',
+    aiSnapshotPending: false,
     result: null,
     activeFrameId: null,
     selectedFrameId: null,
@@ -251,6 +254,10 @@
     if (command === 'REQUEST_ANCESTOR_EXPORT') {
       ui.ancestorExportPending = false;
       ui.ancestorExport = null;
+    }
+    if (command === 'REQUEST_AI_SNAPSHOT') {
+      ui.aiSnapshotPending = false;
+      ui.aiSnapshot = '';
     }
     if (command === 'RESTORE_SELECTION') ui.pendingHistoryIndex = null;
     setUIStatus(`操作を完了できませんでした: ${error}`, 'error');
@@ -743,6 +750,53 @@
         kind: 'status',
         status: 'error',
         ancestorExportFailed: true,
+        message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }
+
+  function emitAiSnapshot(selectionId, profile, scope) {
+    if (selectionId !== frameState.currentSelectionId) {
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        aiSnapshotFailed: true,
+        message: '選択対象が更新されたため、AI Snapshotを再取得してください。'
+      });
+      return;
+    }
+    const selected = frameState.selectedElement;
+    if (!isElement(selected) || !selected.isConnected) {
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        aiSnapshotFailed: true,
+        message: 'AI Snapshotの対象要素がページから削除されています。'
+      });
+      return;
+    }
+    const resolvedProfile = profile === 'full' ? 'full' : 'compact';
+    const resolvedScope = ['selected', 'viewport', 'page'].includes(scope) ? scope : 'selected';
+    const root = resolvedScope === 'selected'
+      ? selected
+      : document.body || document.documentElement || selected;
+    try {
+      const snapshot = globalThis.ElementInspector?.buildAiSnapshot?.(root, {
+        profile: resolvedProfile,
+        viewportOnly: resolvedScope === 'viewport'
+      }) || '';
+      emitFrameEvent({
+        kind: 'aiSnapshot',
+        selectionId,
+        profile: resolvedProfile,
+        scope: resolvedScope,
+        snapshot
+      });
+    } catch (error) {
+      emitFrameEvent({
+        kind: 'status',
+        status: 'error',
+        aiSnapshotFailed: true,
         message: error instanceof Error ? error.message : String(error)
       });
     }
@@ -1853,6 +1907,7 @@
   function clearTopSelectionState() {
     ui.result = null;
     ui.aiSnapshot = '';
+    ui.aiSnapshotPending = false;
     ui.activeFrameId = null;
     ui.selectedFrameId = null;
     ui.currentSelectionId = null;
@@ -2036,8 +2091,32 @@
   function renderAiSnapshotView() {
     if (!ui.aiPreview || !ui.aiCopyButton) return;
     const snapshot = typeof ui.aiSnapshot === 'string' ? ui.aiSnapshot : '';
-    ui.aiCopyButton.disabled = !snapshot;
-    ui.aiPreview.textContent = snapshot || '固定した要素のAI Snapshotがここに表示されます。';
+    ui.aiCopyButton.disabled = ui.aiSnapshotPending || !snapshot;
+    ui.aiPreview.textContent = ui.aiSnapshotPending
+      ? 'AI Snapshotを生成しています…'
+      : snapshot || '固定した要素のAI Snapshotがここに表示されます。';
+  }
+
+  function currentAiSnapshotOptions() {
+    return {
+      profile: ui.aiProfileSelect?.value === 'full' ? 'full' : 'compact',
+      scope: ['selected', 'viewport', 'page'].includes(ui.aiScopeSelect?.value)
+        ? ui.aiScopeSelect.value
+        : 'selected'
+    };
+  }
+
+  function requestAiSnapshot() {
+    if (!ui.result || !ui.currentSelectionId) return;
+    const { profile, scope } = currentAiSnapshotOptions();
+    ui.aiSnapshot = '';
+    ui.aiSnapshotPending = true;
+    renderAiSnapshotView();
+    sendTopCommand('REQUEST_AI_SNAPSHOT', {
+      selectionId: ui.currentSelectionId,
+      profile,
+      scope
+    });
   }
 
   function requestAncestorExport() {
@@ -2164,6 +2243,20 @@
       return;
     }
 
+    if (event.kind === 'aiSnapshot') {
+      const expected = currentAiSnapshotOptions();
+      if (
+        event.selectionId !== ui.currentSelectionId ||
+        event.profile !== expected.profile ||
+        event.scope !== expected.scope
+      ) return;
+      ui.aiSnapshotPending = false;
+      ui.aiSnapshot = typeof event.snapshot === 'string' ? event.snapshot : '';
+      renderAiSnapshotView();
+      setUIStatus('AI Snapshotを更新しました。', 'success');
+      return;
+    }
+
     if (event.kind === 'hover') {
       ui.activeFrameId = event.frameId;
       ui.targetName.textContent = event.summary?.label || 'Hovered element';
@@ -2192,6 +2285,7 @@
       ui.pendingHistoryIndex = null;
       ui.result = event.result;
       ui.aiSnapshot = typeof event.aiSnapshot === 'string' ? event.aiSnapshot : '';
+      ui.aiSnapshotPending = false;
       ui.activeFrameId = event.frameId;
       ui.selectedFrameId = event.frameId;
       ui.currentSelectionId = event.selectionId || null;
@@ -2201,8 +2295,10 @@
       setUIStatus(event.statusMessage || `${event.reason || '選択'}で対象を固定しました。`, 'success');
       renderUI();
       if (ui.jsonProfile === 'ancestor-detail') requestAncestorExport();
+      const aiOptions = currentAiSnapshotOptions();
+      if (aiOptions.profile !== 'compact' || aiOptions.scope !== 'selected') requestAiSnapshot();
       if (delayedAction !== 'selection-only') {
-        void runDelayedSelectionAction(delayedAction, event.result, ui.aiSnapshot);
+        void runDelayedSelectionAction(delayedAction, event.result, event.aiSnapshot || '');
       }
       return;
     }
@@ -2213,6 +2309,11 @@
         ui.ancestorExportPending = false;
         ui.ancestorExport = null;
         renderJsonView();
+      }
+      if (event.aiSnapshotFailed) {
+        ui.aiSnapshotPending = false;
+        ui.aiSnapshot = '';
+        renderAiSnapshotView();
       }
       setUIStatus(event.message || '状態を更新しました。', event.status || 'normal');
       renderUI();
@@ -2815,6 +2916,10 @@
       .json-toolbar { display: flex; justify-content: flex-end; gap: 6px; margin-bottom: 8px; }
       .json-preview { max-height: 380px; }
       .ai-note { margin: 0 0 8px; color: var(--ei-muted); font-size: 8.5px; line-height: 1.45; }
+      .ai-controls { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 6px; margin-bottom: 8px; }
+      .ai-control { min-width: 0; }
+      .ai-control span { display: block; margin-bottom: 3px; color: var(--ei-faint); font-size: 7.5px; font-weight: 700; letter-spacing: .055em; text-transform: uppercase; }
+      .ai-control select { min-height: 29px; font-size: 8.5px; }
       .ai-snapshot-preview { max-height: 430px; }
       .compare-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
       .compare-note { color: var(--ei-muted); font-size: 9px; }
@@ -2908,6 +3013,7 @@
         .json-profile-head { align-items: stretch; flex-direction: column; }
         .json-profile-control { display: grid; grid-template-columns: 1fr 1fr; }
         .json-scope { grid-template-columns: 1fr; }
+        .ai-controls { grid-template-columns: 1fr; }
         .nav-grid { grid-template-columns: repeat(3, 1fr); }
         .tabs { gap: 14px; }
         .styles-toolbar { grid-template-columns: 1fr; gap: 4px; }
@@ -3253,7 +3359,24 @@
                 <h2 class="section-title">AI Snapshot</h2>
                 <button type="button" data-action="copy-ai-snapshot">AI Snapshotをコピー</button>
               </div>
-              <p class="ai-note">表示テキスト、意味のある構造、操作可能要素と状態だけを残したAI向けの最小DOM表現です。</p>
+              <div class="ai-controls">
+                <label class="ai-control">
+                  <span>Profile</span>
+                  <select data-ai-profile aria-label="AI Snapshotプロファイル">
+                    <option value="compact">AI Snapshot</option>
+                    <option value="full">Full AI Snapshot</option>
+                  </select>
+                </label>
+                <label class="ai-control">
+                  <span>Scope</span>
+                  <select data-ai-scope aria-label="AI Snapshot範囲">
+                    <option value="selected">Selected subtree</option>
+                    <option value="viewport">Current viewport</option>
+                    <option value="page">Full page</option>
+                  </select>
+                </label>
+              </div>
+              <p class="ai-note">主要領域を優先し、表示テキスト、意味のある構造、操作可能要素と状態だけを残します。Fullでは長いlistを省略しません（安全上限あり）。</p>
               <pre class="code-box ai-snapshot-preview">固定した要素のAI Snapshotがここに表示されます。</pre>
             </section>
           </div>
@@ -3387,6 +3510,8 @@
     ui.jsonPreview = panel.querySelector('.json-preview');
     ui.aiCopyButton = panel.querySelector('[data-action="copy-ai-snapshot"]');
     ui.aiPreview = panel.querySelector('.ai-snapshot-preview');
+    ui.aiProfileSelect = panel.querySelector('[data-ai-profile]');
+    ui.aiScopeSelect = panel.querySelector('[data-ai-scope]');
 
     ui.header.addEventListener('pointerdown', beginPanelDrag);
     ui.header.addEventListener('pointermove', movePanel);
@@ -3426,6 +3551,8 @@
     ui.jsonCopyButton.addEventListener('click', copyJson);
     ui.jsonSaveButton.addEventListener('click', downloadJson);
     ui.aiCopyButton.addEventListener('click', copyAiSnapshot);
+    ui.aiProfileSelect.addEventListener('change', requestAiSnapshot);
+    ui.aiScopeSelect.addEventListener('change', requestAiSnapshot);
     for (const button of ui.tabButtons) {
       button.addEventListener('click', () => setActiveTab(button.dataset.tab));
       button.addEventListener('keydown', handleTabKeyDown);
@@ -3563,6 +3690,7 @@
     ui.ancestorExport = null;
     ui.ancestorExportPending = false;
     ui.aiSnapshot = '';
+    ui.aiSnapshotPending = false;
   }
 
   function setActive(active) {
@@ -3668,6 +3796,10 @@
     }
     if (command === 'REQUEST_ANCESTOR_EXPORT') {
       emitAncestorExport(message.selectionId);
+      return;
+    }
+    if (command === 'REQUEST_AI_SNAPSHOT') {
+      emitAiSnapshot(message.selectionId, message.profile, message.scope);
       return;
     }
     if (command === 'RESTORE_SELECTION') {

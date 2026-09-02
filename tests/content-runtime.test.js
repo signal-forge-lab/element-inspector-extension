@@ -70,6 +70,9 @@ function createContentHarness(options = {}) {
         : null,
       clearTopSelectionState: typeof clearTopSelectionState === 'function'
         ? clearTopSelectionState
+        : null,
+      handleFrameCommand: typeof handleFrameCommand === 'function'
+        ? handleFrameCommand
         : null
     };
   ${source.slice(closeIndex)}`;
@@ -103,7 +106,7 @@ function createContentHarness(options = {}) {
     readyState: 'complete',
     title: 'Test document',
     documentElement: { appendChild() {} },
-    body: null,
+    body: options.documentBody || null,
     addEventListener() {},
     removeEventListener() {},
     querySelectorAll(selector) {
@@ -143,6 +146,7 @@ function createContentHarness(options = {}) {
     }
   };
 
+  const aiSnapshotCalls = [];
   const context = {
     chrome,
     console,
@@ -190,7 +194,8 @@ function createContentHarness(options = {}) {
           }
         };
       },
-      buildAiSnapshot() {
+      buildAiSnapshot(element, snapshotOptions) {
+        aiSnapshotCalls.push({ element, options: snapshotOptions || {} });
         return options.aiSnapshot || 'button "Default snapshot"';
       },
       getNavigableChildren() {
@@ -208,6 +213,7 @@ function createContentHarness(options = {}) {
     parentMessages,
     parentWindow,
     clipboardWrites,
+    aiSnapshotCalls,
     frameLocatorCallCount() {
       return frameLocatorCalls;
     },
@@ -254,6 +260,47 @@ test('keeps AI Snapshot separate from the Standard JSON result when selecting', 
   assert.ok(selectedMessage);
   assert.equal(selectedMessage.event.aiSnapshot, 'button "Save"');
   assert.equal(Object.prototype.hasOwnProperty.call(selectedMessage.event.result, 'aiSnapshot'), false);
+});
+
+test('generates requested AI snapshot profile and scope from the selected frame', () => {
+  const body = new FakeElement({ connected: true });
+  const selected = new FakeElement({ connected: true });
+  const harness = createContentHarness({ documentBody: body, aiSnapshot: 'snapshot' });
+  Object.assign(harness.api.frameState, {
+    active: true,
+    selectedElement: selected,
+    currentSelectionId: 'selection-1'
+  });
+
+  harness.api.handleFrameCommand({
+    command: 'REQUEST_AI_SNAPSHOT',
+    selectionId: 'selection-1',
+    profile: 'full',
+    scope: 'page'
+  });
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.element, body);
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.options.profile, 'full');
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.options.viewportOnly, false);
+
+  harness.api.handleFrameCommand({
+    command: 'REQUEST_AI_SNAPSHOT',
+    selectionId: 'selection-1',
+    profile: 'compact',
+    scope: 'viewport'
+  });
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.element, body);
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.options.profile, 'compact');
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.options.viewportOnly, true);
+
+  harness.api.handleFrameCommand({
+    command: 'REQUEST_AI_SNAPSHOT',
+    selectionId: 'selection-1',
+    profile: 'compact',
+    scope: 'selected'
+  });
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.element, selected);
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.options.profile, 'compact');
+  assert.equal(harness.aiSnapshotCalls.at(-1)?.options.viewportOnly, false);
 });
 
 test('previews a child without changing selection and restores the original highlight on cancel', () => {

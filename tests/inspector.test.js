@@ -92,13 +92,9 @@ class MockElement {
   matches(selector) {
     return String(selector).split(',').some(part => {
       const item = part.trim();
-      if (item === 'button') return this.tagName === 'BUTTON';
-      if (item === 'a') return this.tagName === 'A';
-      if (item === 'svg') return this.tagName === 'SVG';
-      if (item === 'path') return this.tagName === 'PATH';
-      if (item === 'circle') return this.tagName === 'CIRCLE';
-      if (item === 'use') return this.tagName === 'USE';
-      if (item === '[role="button"]') return this.getAttribute('role') === 'button';
+      if (/^[a-z][a-z0-9-]*$/.test(item)) return this.localName === item;
+      const roleMatch = item.match(/^\[role="([^"]+)"\]$/);
+      if (roleMatch) return this.getAttribute('role') === roleMatch[1];
       if (item === '[tabindex]') return this.hasAttribute('tabindex');
       return false;
     });
@@ -695,6 +691,57 @@ test('builds a minimal AI snapshot from visible semantic content and actions', (
   assert.doesNotMatch(snapshot, /super-secret|Do not expose this|Also invisible/);
 });
 
+test('prioritizes primary regions and compresses long lists only in compact AI snapshots', () => {
+  const root = new MockElement('div');
+  const navigation = root.appendChild(new MockElement('nav', { 'aria-label': 'Chat history' }));
+  const list = navigation.appendChild(new MockElement('ul'));
+  for (let index = 1; index <= 15; index += 1) {
+    const item = list.appendChild(new MockElement('li'));
+    const link = item.appendChild(new MockElement('a', { href: `/c/${index}` }));
+    link.appendText(`Chat ${index}`);
+  }
+  const main = root.appendChild(new MockElement('main'));
+  main.appendText('Current conversation');
+  main.appendChild(new MockElement('button', { 'aria-label': 'Send' }));
+
+  const compact = inspector.buildAiSnapshot(root, { profile: 'compact' });
+  assert.ok(compact.indexOf('main') < compact.indexOf('navigation "Chat history"'));
+  assert.match(compact, /… 5 more items/);
+  assert.match(compact, /link "Chat 1"/);
+  assert.match(compact, /link "Chat 15"/);
+  assert.doesNotMatch(compact, /link "Chat 9"/);
+
+  const full = inspector.buildAiSnapshot(root, { profile: 'full' });
+  assert.ok(full.indexOf('main') < full.indexOf('navigation "Chat history"'));
+  assert.doesNotMatch(full, /more items/);
+  assert.match(full, /link "Chat 9"/);
+});
+
+test('filters AI snapshot output to the current viewport without hiding visible descendants', () => {
+  const root = new MockElement('div', {}, {
+    rect: { top: 0, left: 0, width: 800, height: 1400 }
+  });
+  root.ownerDocument.defaultView.innerWidth = 800;
+  root.ownerDocument.defaultView.innerHeight = 600;
+  const visible = root.appendChild(new MockElement('button', { 'aria-label': 'Visible action' }, {
+    rect: { top: 100, left: 20, width: 120, height: 40 }
+  }));
+  const offscreenWrapper = root.appendChild(new MockElement('div', {}, {
+    rect: { top: 900, left: 0, width: 800, height: 200 }
+  }));
+  offscreenWrapper.appendChild(new MockElement('button', { 'aria-label': 'Offscreen action' }, {
+    rect: { top: 930, left: 20, width: 120, height: 40 }
+  }));
+  assert.ok(visible);
+
+  const viewport = inspector.buildAiSnapshot(root, { profile: 'compact', viewportOnly: true });
+  assert.match(viewport, /button "Visible action"/);
+  assert.doesNotMatch(viewport, /Offscreen action/);
+
+  const page = inspector.buildAiSnapshot(root, { profile: 'compact' });
+  assert.match(page, /button "Offscreen action"/);
+});
+
 test('manifest and static release contracts are aligned', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
@@ -709,10 +756,10 @@ test('manifest and static release contracts are aligned', () => {
 
   assert.equal(manifest.manifest_version, 3);
   assert.equal(manifest.name, 'Prismora — Web Element Inspector');
-  assert.equal(manifest.version, '0.16.0');
+  assert.equal(manifest.version, '0.17.0');
   assert.equal(manifest.action.default_title, 'Prismoraを開く');
   assert.equal(pkg.name, 'prismora-web-element-inspector');
-  assert.equal(pkg.version, '0.16.0');
+  assert.equal(pkg.version, '0.17.0');
   assert.deepEqual(manifest.icons, {
     16: 'assets/icons/main-icon-16.png',
     32: 'assets/icons/main-icon-32.png',
@@ -802,6 +849,13 @@ test('manifest and static release contracts are aligned', () => {
   assert.match(content, /value="copy-css"[^>]*>CSS Selectorコピー/);
   assert.match(content, /value="copy-ai-snapshot"[^>]*>AI Snapshotコピー/);
   assert.match(content, /data-action="copy-ai-snapshot"/);
+  assert.match(content, /data-ai-profile/);
+  assert.match(content, /value="compact"[^>]*>AI Snapshot/);
+  assert.match(content, /value="full"[^>]*>Full AI Snapshot/);
+  assert.match(content, /data-ai-scope/);
+  assert.match(content, /value="selected"[^>]*>Selected subtree/);
+  assert.match(content, /value="viewport"[^>]*>Current viewport/);
+  assert.match(content, /value="page"[^>]*>Full page/);
   assert.match(content, /AI Snapshot/);
   assert.match(inspectorSource, /function buildAiSnapshot\(/);
   assert.match(content, /\.view-scroll \{[^}]*overflow-y: auto;[^}]*overflow-x: hidden;/s);

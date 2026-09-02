@@ -145,14 +145,15 @@ test('recovers an active session before processing the first frame event after s
   assert.equal(forwarded.message.event.frameId, 7);
 });
 
-test('recovers active and selected frame routing for countdown, navigation, edit, and ancestor export commands', () => {
+test('recovers active and selected frame routing for countdown, navigation, edit, ancestor export, and AI snapshot commands', () => {
   const cases = [
     { command: 'FIX_ACTIVE_HOVER', routedCommand: 'FIX_HOVER', targetFrameId: 5 },
     { command: 'NAVIGATE', routedCommand: 'NAVIGATE', targetFrameId: 7 },
     { command: 'PREVIEW_CHILD', routedCommand: 'PREVIEW_CHILD', targetFrameId: 7 },
     { command: 'CLEAR_CHILD_PREVIEW', routedCommand: 'CLEAR_CHILD_PREVIEW', targetFrameId: 7 },
     { command: 'APPLY_EDIT', routedCommand: 'APPLY_EDIT', targetFrameId: 7 },
-    { command: 'REQUEST_ANCESTOR_EXPORT', routedCommand: 'REQUEST_ANCESTOR_EXPORT', targetFrameId: 7 }
+    { command: 'REQUEST_ANCESTOR_EXPORT', routedCommand: 'REQUEST_ANCESTOR_EXPORT', targetFrameId: 7 },
+    { command: 'REQUEST_AI_SNAPSHOT', routedCommand: 'REQUEST_AI_SNAPSHOT', targetFrameId: 7 }
   ];
   for (const { command, routedCommand, targetFrameId } of cases) {
     const harness = createBackgroundHarness({
@@ -170,7 +171,9 @@ test('recovers active and selected frame routing for countdown, navigation, edit
       direction: 'parent',
       property: 'display',
       value: 'grid',
-      selectionId: 'selection-7'
+      selectionId: 'selection-7',
+      profile: 'full',
+      scope: 'page'
     };
     const outcome = harness.dispatch(message, { frameId: 0 });
 
@@ -182,6 +185,11 @@ test('recovers active and selected frame routing for countdown, navigation, edit
       item.message.command === routedCommand
     );
     assert.ok(routed, `${command} was not routed to the recovered target frame`);
+    if (command === 'REQUEST_AI_SNAPSHOT') {
+      assert.equal(routed.message.selectionId, 'selection-7');
+      assert.equal(routed.message.profile, 'full');
+      assert.equal(routed.message.scope, 'page');
+    }
   }
 });
 

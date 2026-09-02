@@ -2,7 +2,7 @@
 
 ## バージョン
 
-`0.16.0`
+`0.17.0`
 
 ## 構成
 
@@ -141,6 +141,7 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 - 遅延固定直後の選択のみ / Standard JSONコピー・保存 / CSS Selectorコピー / AI Snapshotコピー
 - Locator単体コピー
 - AI Snapshotコピー
+- AI SnapshotのProfile / Scope切替と選択frameへの再生成request
 - JSONコピー・保存
 - 編集CSSコピー
 - ヘッダドラッグ
@@ -156,6 +157,8 @@ Service Worker再起動後にBackground状態が未復元の場合、ツール�
 固定要素の切断、子frameの`pagehide`、選択frameの新しい`FRAME_READY`を`selectionInvalidated`へ統一します。Backgroundはframe IDとselection IDの両方が現在値と一致する場合だけ選択状態を解除し、全フレームへ`START_PICKING`をbroadcastします。トップframe再読み込み時も古い選択ルーティングを破棄します。
 
 遅延固定の`FIX_HOVER`で生成する`selected`イベントだけに`delayed: true`を付与します。トップフレームはそのイベントを受信した直後、`遅延固定後`プルダウンの現在値に応じて、すでに取得済みのStandard結果、CSS Selector、またはAI Snapshotをコピー・保存します。通常クリック、履歴復元、Hierarchy移動、再解析では自動処理しません。追加のChrome権限やStorageは使用しません。
+
+AIタブのProfile / Scope変更は`REQUEST_AI_SNAPSHOT`をBackground経由で`selectedFrameId`へrouteします。対象frameは`selectionId`が現在値と一致することを確認してから再生成し、`aiSnapshot`イベントでトップframeへ返します。`Selected subtree`は現在Element、`Current viewport`と`Full page`はそのElementが属するDocumentの`body`をrootにします。Current viewportだけ`viewportOnly: true`を指定します。
 
 Stylesの長いComputed Style値はカード内で折り返し、外側の`.view-scroll`は縦スクロールだけを担当します。LocatorやJSONのコード表示は各`.code-box`自身が必要なスクロールを保持します。
 
@@ -176,19 +179,23 @@ collectShadowContext(element)
 collectComputedStyles(element)
 collectBoxModel(element)
 collectAccessibility(element)
-buildAiSnapshot(element)
+buildAiSnapshot(element, { profile, viewportOnly })
 collectEventInfo(element)
 ```
 
 ### AI Snapshot
 
-`ElementInspector.buildAiSnapshot()`は選択要素をrootとして同期的にsubtreeを走査し、AIが画面内容と操作可能性を判断するためのsemantic text treeを生成します。Standard JSONの`result`には追加せず、`inspectAndSelect()`が`selected`イベントの`aiSnapshot`フィールドとして別送し、トップフレームのUI stateで独立して保持します。
+`ElementInspector.buildAiSnapshot()`は指定Elementをrootとして同期的にsubtreeを走査し、AIが画面内容と操作可能性を判断するためのsemantic text treeを生成します。Standard JSONの`result`には追加せず、`inspectAndSelect()`が遅延固定にも使える`compact + selected subtree`の結果を`selected`イベントの`aiSnapshot`フィールドとして別送します。Profile / Scope変更時は同じbuilderを選択frame内で再実行します。
 
 出力はallowlist方式です。表示テキスト、role、accessible name、見出しレベル、リンク先、フォーム値、checked / selected / expanded / disabled等の主要stateだけを構成し、`class`、`style`、`data-*`など元DOM属性をコピーしません。roleを持たないwrapperは出力せず子へcollapseします。password値は`[hidden]`へ置換します。
 
 `hidden`、`aria-hidden="true"`、`display:none`、`visibility:hidden / collapse`、`opacity:0`はsubtreeごと除外します。open Shadow RootではShadow treeを走査し、slotは取得可能なら`assignedNodes({ flatten: true })`を使用します。closed Shadow Root、CSS generated content、canvasのpixel内容、cross-origin iframe内部は対象外です。
 
-暴走防止として最大500要素、DOM深度40、出力16,000文字で打ち切り、末尾へ`… [truncated]`を付けます。各text/name/valueは320文字へ制限します。
+rootからlandmarkへ到達するまでの意味を持たないwrapperでは、子subtreeのsemantic region優先度を計算して順序を付けます。優先度は`main`、dialog / alertdialog、form、banner、complementary、navigation、contentinfoです。一度landmark内へ入った後はそのregion内部のDOM順を維持します。
+
+`compact` Profileでは10件を超える直接`listitem`を先頭8件＋末尾2件へ圧縮し、途中を`… N more items`へ置換します。`full`では圧縮しません。Current viewport用の`viewportOnly`では各Elementの`getBoundingClientRect()`をDocumentのviewportと比較し、画面外のsemantic atomic elementとtextを出力せず、wrapperは子要素のために走査を継続します。
+
+暴走防止上限はProfile別です。`compact`は最大1,000要素、DOM深度40、32,000文字、各text/name/value 320文字です。`full`は最大5,000要素、DOM深度80、120,000文字、各text/name/value 2,000文字です。上限到達時は末尾へ`… [truncated]`を付けます。
 
 返却形式：
 

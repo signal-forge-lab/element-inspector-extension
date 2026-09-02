@@ -17,7 +17,7 @@ Chromeの拡張機能設定画面では`Prismora — Web Element Inspector`と�
 
 ## 現在のバージョン
 
-`0.16.0`
+`0.17.0`
 
 - [変更履歴](CHANGELOG.md)
 - [プライバシーポリシー](PRIVACY.md)
@@ -92,7 +92,22 @@ UIはプロジェクト内の`apple-design`スキルを設計基準として、�
 
 ### AI Snapshot
 
-AI Snapshotは、生HTMLから属性を削るのではなく、選択要素のsubtreeからAIが画面内容と操作可能性を判断するために必要な情報だけを新しく生成します。
+AI Snapshotは、生HTMLから属性を削るのではなく、AIが画面内容と操作可能性を判断するために必要な情報だけを新しく生成します。`AI`タブではProfileとScopeを切り替えられます。
+
+```text
+Profile
+├─ AI Snapshot       推奨。主要領域を優先し、長大listを圧縮
+└─ Full AI Snapshot  listを圧縮せず、より大きい安全上限で出力
+
+Scope
+├─ Selected subtree  現在選択している要素以下
+├─ Current viewport  現在のframeで画面内に見えている内容
+└─ Full page         現在のframeのDocument全体
+```
+
+ページ全体を対象にする場合も単純なDOM順ではなく、`main`、dialog、form、banner、complementary、navigation、contentinfoの順で主要semantic regionを優先します。これにより、Sidebarや長いナビゲーションが先にDOMへ存在しても、現在の主要コンテンツを先に確保します。
+
+通常の`AI Snapshot`では、10件を超える直接list itemを先頭8件＋末尾2件へ圧縮し、途中を`… N more items`として表します。`Full AI Snapshot`ではこの圧縮を行いません。
 
 ```text
 dialog "Account settings"
@@ -110,6 +125,10 @@ dialog "Account settings"
 `hidden`、`aria-hidden="true"`、`display:none`、`visibility:hidden / collapse`、`opacity:0`のsubtreeは除外します。password inputは値を`[hidden]`として扱います。open Shadow Rootは解析対象にできますが、closed Shadow Root、CSS生成content、canvasの描画内容、cross-origin iframe内部などDOMから取得できない視覚情報は含みません。
 
 AI SnapshotはStandard JSONへ追加せず独立して保持します。遅延固定時も要素を固定した瞬間に同期生成するため、その直後にhover UIが消えても`AI Snapshotコピー`には固定時点の内容を使用します。
+
+遅延固定の`AI Snapshotコピー`は、Profile / ScopeのUI設定とは独立して`AI Snapshot + Selected subtree`を使用します。消えるhover UIを固定した瞬間の情報を最小コストで確保するためです。
+
+安全上限は通常Profileが最大1,000要素・32,000文字・深度40・各text/name/value 320文字、Fullが最大5,000要素・120,000文字・深度80・各text/name/value 2,000文字です。上限へ達した場合は`… [truncated]`を付けます。
 
 ### 強調表示
 

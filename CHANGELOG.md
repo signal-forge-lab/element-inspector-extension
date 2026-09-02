@@ -2,6 +2,20 @@
 
 Prismoraの主な変更を記録します。
 
+## [0.17.0] - 2026-09-02
+
+### Added
+
+- AI Snapshotへ`AI Snapshot / Full AI Snapshot`プロファイルと`Selected subtree / Current viewport / Full page`スコープを追加しました。
+- AI SnapshotのProfile / Scope変更時は、現在選択中のframeへ再生成要求をrouteし、iframe内の選択でも正しいDocumentを対象にします。
+
+### Changed
+
+- AI SnapshotはDOM順だけで消費せず、`main`、dialog、form、banner、complementary、navigation、contentinfoの順で主要semantic regionを優先するようにしました。
+- 通常のAI Snapshotでは10件を超える長いlistを先頭8件＋末尾2件へ圧縮し、`… N more items`を表示します。Full AI Snapshotではlistを圧縮しません。
+- 通常プロファイルの安全上限を1,000要素 / 32,000文字 / 深度40、Fullを5,000要素 / 120,000文字 / 深度80へ分けました。
+- Current viewportでは`getBoundingClientRect()`と現在のviewportの交差で出力対象を絞り、画面外のatomic要素とtextを除外します。
+
 ## [0.16.0] - 2026-09-02
 
 ### Added
