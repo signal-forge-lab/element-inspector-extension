@@ -96,7 +96,8 @@ AI Snapshotは、生HTMLから属性を削るのではなく、選択要素のsu
 
 ```text
 dialog "Account settings"
-  heading[2] "Profile"
+  heading[2]
+    text "Profile"
   textbox "Display name" value="Shogo"
   checkbox "Public profile" checked
   link "Privacy policy" -> "/privacy"
